@@ -177,24 +177,22 @@
               <span>Redirect URI</span>
               <code id="spotify-redirect-uri"></code>
             </div>
-            <form class="spotify-client-form" id="spotify-client-form">
-              <label>
-                Client ID
-                <input id="spotify-client-id" type="text" autocomplete="off" placeholder="SpotifyアプリのClient ID" />
-              </label>
-              <button class="primary-button" type="submit">Spotifyに接続</button>
-            </form>
+            <div class="spotify-redirect">
+              <span>App Client ID</span>
+              <code id="spotify-config-client-id"></code>
+            </div>
             <form class="spotify-search-form" id="spotify-search-form">
               <label>
                 Spotifyで曲を検索
                 <input id="spotify-search-input" type="search" placeholder="曲名やアーティスト名を入力" required />
               </label>
-              <button class="primary-button" type="submit">検索して再生</button>
+              <button class="primary-button" type="submit">検索</button>
             </form>
             <div class="spotify-actions">
-              <button class="ghost-button" id="spotify-ready" type="button">プレイヤー準備</button>
-              <button class="primary-button" id="spotify-lilac" type="button">ライラックを検索して再生</button>
+              <button class="ghost-button" id="spotify-ready" type="button">Spotifyログイン/プレイヤー準備</button>
+              <button class="primary-button" id="spotify-lilac" type="button">ライラックを検索</button>
             </div>
+            <div class="spotify-results" id="spotify-results" aria-live="polite"></div>
           </section>
 
           <section class="composer compact" aria-labelledby="party-add-title">
@@ -304,6 +302,7 @@
       </article>
     </template>
 
+    <script src="config.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

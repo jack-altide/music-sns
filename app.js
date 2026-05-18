@@ -15,6 +15,7 @@ const SPOTIFY_KEYS = {
   authState: "music-sns-spotify-auth-state",
   token: "music-sns-spotify-token",
 };
+const APP_CONFIG = window.MUSIC_SNS_CONFIG || {};
 
 const seedState = {
   currentAccountId: "acct-rin",
@@ -219,10 +220,10 @@ const partyQueue = document.querySelector("#party-queue");
 const partyArt = document.querySelector("#party-art");
 const spotifyStatus = document.querySelector("#spotify-status");
 const spotifyRedirectUri = document.querySelector("#spotify-redirect-uri");
-const spotifyClientForm = document.querySelector("#spotify-client-form");
-const spotifyClientIdInput = document.querySelector("#spotify-client-id");
+const spotifyConfigClientId = document.querySelector("#spotify-config-client-id");
 const spotifySearchForm = document.querySelector("#spotify-search-form");
 const spotifySearchInput = document.querySelector("#spotify-search-input");
+const spotifyResults = document.querySelector("#spotify-results");
 const spotifyReadyButton = document.querySelector("#spotify-ready");
 const spotifyLilacButton = document.querySelector("#spotify-lilac");
 
@@ -428,19 +429,6 @@ partyTrackForm.addEventListener("submit", (event) => {
   renderParty();
 });
 
-spotifyClientForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-
-  const clientId = spotifyClientIdInput.value.trim();
-  if (!clientId) {
-    alert("Spotify Developer Dashboardで作成したClient IDを入力してください。");
-    return;
-  }
-
-  localStorage.setItem(SPOTIFY_KEYS.clientId, clientId);
-  await beginSpotifyAuthorization(clientId);
-});
-
 spotifyReadyButton.addEventListener("click", async () => {
   try {
     await prepareSpotifyPlayer();
@@ -457,7 +445,7 @@ spotifySearchForm.addEventListener("submit", async (event) => {
   if (!query) return;
 
   try {
-    await addSpotifySearchToPartyAndPlay(query);
+    await searchSpotifyAndRenderResults(query);
   } catch (errorObject) {
     spotifyStatusMessage = `Spotify検索に失敗しました: ${errorObject.message}`;
     renderSpotifyPanel();
@@ -466,7 +454,7 @@ spotifySearchForm.addEventListener("submit", async (event) => {
 
 spotifyLilacButton.addEventListener("click", async () => {
   try {
-    await addLilacToPartyAndPlay();
+    await searchLilacAndRenderResults();
   } catch (errorObject) {
     spotifyStatusMessage = `Spotify連携に失敗しました: ${errorObject.message}`;
     renderSpotifyPanel();
@@ -746,18 +734,20 @@ function renderPartyCover(track) {
 
 function renderSpotifyPanel() {
   const token = getStoredSpotifyToken();
-  const clientId = localStorage.getItem(SPOTIFY_KEYS.clientId) || "";
+  const clientId = getSpotifyClientId();
   const redirectUri = getSpotifyRedirectUri();
 
-  spotifyClientIdInput.value = spotifyClientIdInput.value || clientId;
   spotifyRedirectUri.textContent = redirectUri;
+  spotifyConfigClientId.textContent = clientId ? maskClientId(clientId) : "未設定: config.jsのspotifyClientIdを設定";
 
-  if (spotifyReady && spotifyDeviceId) {
+  if (!clientId) {
+    spotifyStatus.textContent = "Spotify Client IDが未設定です。config.jsを設定してください。";
+  } else if (spotifyReady && spotifyDeviceId) {
     spotifyStatus.textContent = `接続済み / Web Playback SDK device: ${spotifyDeviceId.slice(0, 8)}...`;
   } else if (token?.accessToken && !isSpotifyTokenExpired(token)) {
     spotifyStatus.textContent = spotifyStatusMessage || "Spotify認証済み。プレイヤー準備を押してください。";
   } else {
-    spotifyStatus.textContent = spotifyStatusMessage || "未接続";
+    spotifyStatus.textContent = spotifyStatusMessage || "未接続。検索時にSpotifyログインへ進みます。";
   }
 }
 
@@ -1186,7 +1176,6 @@ function ensureAudioContext() {
 
 async function initSpotifyIntegration() {
   spotifyRedirectUri.textContent = getSpotifyRedirectUri();
-  spotifyClientIdInput.value = localStorage.getItem(SPOTIFY_KEYS.clientId) || "";
 
   const params = new URLSearchParams(window.location.search);
   const error = params.get("error");
@@ -1241,10 +1230,10 @@ async function beginSpotifyAuthorization(clientId) {
 async function completeSpotifyAuthorization(code, authState) {
   const savedState = localStorage.getItem(SPOTIFY_KEYS.authState);
   const codeVerifier = localStorage.getItem(SPOTIFY_KEYS.codeVerifier);
-  const clientId = localStorage.getItem(SPOTIFY_KEYS.clientId);
+  const clientId = getSpotifyClientId();
 
   if (!clientId || !codeVerifier) {
-    throw new Error("Client IDまたはcode verifierが見つかりません。");
+    throw new Error("Spotify Client IDまたはcode verifierが見つかりません。");
   }
 
   if (!savedState || savedState !== authState) {
@@ -1278,8 +1267,16 @@ async function completeSpotifyAuthorization(code, authState) {
 async function prepareSpotifyPlayer() {
   const token = await getValidSpotifyToken();
   if (!token) {
-    spotifyStatusMessage = "Spotifyに接続してください。";
+    const clientId = getSpotifyClientId();
+    if (!clientId) {
+      spotifyStatusMessage = "Spotify Client IDが未設定です。config.jsを設定してください。";
+      renderSpotifyPanel();
+      return false;
+    }
+
+    spotifyStatusMessage = "Spotifyログインに移動します。";
     renderSpotifyPanel();
+    await beginSpotifyAuthorization(clientId);
     return false;
   }
 
@@ -1361,16 +1358,13 @@ async function prepareSpotifyPlayer() {
   return spotifyInitPromise;
 }
 
-async function addSpotifySearchToPartyAndPlay(query) {
-  const clientId = spotifyClientIdInput.value.trim() || localStorage.getItem(SPOTIFY_KEYS.clientId);
-  if (clientId) {
-    localStorage.setItem(SPOTIFY_KEYS.clientId, clientId);
-  }
+async function searchSpotifyAndRenderResults(query) {
+  const clientId = getSpotifyClientId();
 
   const token = await getValidSpotifyToken();
   if (!token) {
     if (!clientId) {
-      alert("Spotify Developer Dashboardで作成したClient IDを入力してください。");
+      alert("Spotify Client IDが未設定です。config.jsのspotifyClientIdを設定してください。");
       return;
     }
 
@@ -1378,18 +1372,26 @@ async function addSpotifySearchToPartyAndPlay(query) {
     return;
   }
 
-  const prepared = await prepareSpotifyPlayer();
-  if (!prepared) return;
-
   spotifyStatusMessage = `Spotifyで「${query}」を検索しています。`;
   renderSpotifyPanel();
 
-  const spotifyTrack = await searchSpotifyTrack(query);
-  if (!spotifyTrack) {
+  const tracks = await searchSpotifyTracks(query);
+  if (!tracks.length) {
     spotifyStatusMessage = `「${query}」に一致する曲が見つかりませんでした。`;
+    renderSpotifyResults([], query);
     renderSpotifyPanel();
     return;
   }
+
+  spotifyStatusMessage = `「${query}」の検索結果から曲を選んでください。`;
+  spotifySearchInput.value = query;
+  renderSpotifyResults(tracks, query);
+  renderSpotifyPanel();
+}
+
+async function playSelectedSpotifyTrack(spotifyTrack, query) {
+  const prepared = await prepareSpotifyPlayer();
+  if (!prepared) return;
 
   const partyTrack = makePartyTrackFromSpotify(spotifyTrack, query);
   const existingTrack = state.watchParty.queue.find((track) => track.spotifyUri === partyTrack.spotifyUri);
@@ -1416,11 +1418,11 @@ async function addSpotifySearchToPartyAndPlay(query) {
   setView("party");
 }
 
-async function addLilacToPartyAndPlay() {
-  await addSpotifySearchToPartyAndPlay("ライラック Mrs. GREEN APPLE");
+async function searchLilacAndRenderResults() {
+  await searchSpotifyAndRenderResults("ライラック Mrs. GREEN APPLE");
 }
 
-async function searchSpotifyTrack(query) {
+async function searchSpotifyTracks(query) {
   const response = await spotifyApiFetch(
     `/search?${new URLSearchParams({
       q: query,
@@ -1431,7 +1433,47 @@ async function searchSpotifyTrack(query) {
   );
 
   const tracks = response.tracks?.items || [];
-  return tracks[0] || null;
+  return tracks.slice(0, 8);
+}
+
+function renderSpotifyResults(tracks, query) {
+  spotifyResults.innerHTML = "";
+
+  if (!tracks.length) {
+    spotifyResults.append(createEmptyState("検索結果がありません。別の曲名やアーティスト名で検索してください。"));
+    return;
+  }
+
+  tracks.forEach((track) => {
+    const row = document.createElement("div");
+    const image = document.createElement("img");
+    const title = document.createElement("div");
+    const name = document.createElement("strong");
+    const meta = document.createElement("span");
+    const button = document.createElement("button");
+
+    row.className = "spotify-result";
+    title.className = "spotify-result-title";
+    image.alt = "";
+    image.src = track.album?.images?.[2]?.url || track.album?.images?.[0]?.url || "";
+    name.textContent = track.name;
+    meta.textContent = `${track.artists.map((artist) => artist.name).join(", ")} / ${track.album?.name || "Spotify"}`;
+    button.className = "icon-button";
+    button.type = "button";
+    button.textContent = "再生";
+    button.addEventListener("click", async () => {
+      try {
+        await playSelectedSpotifyTrack(track, query);
+      } catch (errorObject) {
+        spotifyStatusMessage = `Spotify再生に失敗しました: ${errorObject.message}`;
+        renderSpotifyPanel();
+      }
+    });
+
+    title.append(name, meta);
+    row.append(image, title, button);
+    spotifyResults.append(row);
+  });
 }
 
 function makePartyTrackFromSpotify(track, query) {
@@ -1534,7 +1576,7 @@ async function getValidSpotifyToken() {
   if (!isSpotifyTokenExpired(token)) return token;
   if (!token.refreshToken) return null;
 
-  const clientId = localStorage.getItem(SPOTIFY_KEYS.clientId);
+  const clientId = getSpotifyClientId();
   if (!clientId) return null;
 
   const response = await fetch("https://accounts.spotify.com/api/token", {
@@ -1584,6 +1626,17 @@ function getStoredSpotifyToken() {
 
 function isSpotifyTokenExpired(token) {
   return !token.accessToken || Date.now() >= token.expiresAt;
+}
+
+function getSpotifyClientId() {
+  const configuredClientId = String(APP_CONFIG.spotifyClientId || "").trim();
+  const legacyClientId = localStorage.getItem(SPOTIFY_KEYS.clientId) || "";
+  return configuredClientId || legacyClientId;
+}
+
+function maskClientId(clientId) {
+  if (clientId.length <= 12) return clientId;
+  return `${clientId.slice(0, 8)}...${clientId.slice(-4)}`;
 }
 
 function loadSpotifySdk() {
