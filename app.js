@@ -181,6 +181,10 @@ let partyAudioSignature = "";
 let partyLoopTimer = null;
 let partyOscillators = [];
 let lastAutoAdvanceKey = "";
+let partyServerSyncEnabled = false;
+let partyServerVersion = 0;
+let partyServerClockOffsetMs = 0;
+let partyServerEventSource = null;
 let spotifyPlayer = null;
 let spotifyDeviceId = "";
 let spotifyReady = false;
@@ -391,6 +395,8 @@ partyCommentForm.addEventListener("submit", (event) => {
   state.watchParty.comments.push({
     id: makeId("party-comment"),
     accountId: account.id,
+    authorName: account.name,
+    authorHandle: account.handle,
     body,
     createdAt: new Date().toISOString(),
     trackId: playback.trackId,
@@ -482,6 +488,91 @@ window.addEventListener("storage", (event) => {
     state = normalizeState(state);
   }
 });
+
+function initPartyServerSync() {
+  if (window.location.protocol === "file:") return;
+
+  fetch("/api/watch-party", { cache: "no-store" })
+    .then((response) => {
+      if (!response.ok) throw new Error("watch party sync unavailable");
+      return response.json();
+    })
+    .then((payload) => {
+      partyServerSyncEnabled = true;
+      if (payload.watchParty) {
+        applyPartyServerPayload(payload);
+      } else {
+        void publishWatchPartyToServer("party-init");
+      }
+      connectPartyServerEvents();
+    })
+    .catch(() => {
+      partyServerSyncEnabled = false;
+    });
+}
+
+function connectPartyServerEvents() {
+  if (!partyServerSyncEnabled || partyServerEventSource) return;
+
+  partyServerEventSource = new EventSource("/api/watch-party/events");
+  partyServerEventSource.addEventListener("message", (event) => {
+    try {
+      applyPartyServerPayload(JSON.parse(event.data));
+    } catch {
+      // Ignore malformed event payloads.
+    }
+  });
+  partyServerEventSource.addEventListener("error", () => {
+    partyServerSyncEnabled = false;
+  });
+  partyServerEventSource.addEventListener("open", () => {
+    partyServerSyncEnabled = true;
+  });
+}
+
+function applyPartyServerPayload(payload) {
+  if (!payload?.watchParty) return;
+  if (payload.serverNow) {
+    partyServerClockOffsetMs = Date.now() - payload.serverNow;
+  }
+  if (payload.version && payload.version < partyServerVersion) return;
+
+  partyServerVersion = payload.version || partyServerVersion;
+  state.watchParty = normalizeWatchParty(payload.watchParty, seedState.watchParty);
+  saveState();
+  renderParty();
+  syncPartyAudio();
+}
+
+async function publishWatchPartyToServer(reason) {
+  if (window.location.protocol === "file:") return;
+  if (!shouldPublishWatchParty(reason)) return;
+
+  try {
+    const response = await fetch("/api/watch-party", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        reason,
+        clientNow: getSyncedNow(),
+        watchParty: state.watchParty,
+      }),
+    });
+    if (!response.ok) throw new Error("watch party sync failed");
+
+    partyServerSyncEnabled = true;
+    applyPartyServerPayload(await response.json());
+    connectPartyServerEvents();
+  } catch {
+    partyServerSyncEnabled = false;
+  }
+}
+
+function shouldPublishWatchParty(reason) {
+  return reason === "reset" || reason === "spotify-search" || reason === "party-init" || reason.startsWith("party-");
+}
 
 function setView(viewName) {
   document.querySelectorAll(".nav-tab").forEach((button) => {
@@ -693,6 +784,7 @@ function renderParty() {
   const playback = party.playback;
   const track = getPartyTrack(playback.trackId) || party.queue[0];
   const updatedBy = findAccount(playback.updatedBy);
+  const updatedByName = updatedBy.id === "missing" ? playback.updatedByName || "参加者" : updatedBy.name;
 
   if (!track) {
     partyTrackTitle.textContent = "再生キューが空です";
@@ -706,7 +798,7 @@ function renderParty() {
 
   partyRoomName.textContent = party.roomName;
   partyTrackTitle.textContent = `${track.title} / ${track.artist}`;
-  partyTrackMeta.textContent = `${party.festivalName} / ${track.note || "フェスで流れそうな候補曲"} / 操作: ${updatedBy.name}`;
+  partyTrackMeta.textContent = `${party.festivalName} / ${track.note || "フェスで流れそうな候補曲"} / 操作: ${updatedByName}`;
   partyStatus.textContent = partyJoined ? "同期中" : "未参加";
   partyStatus.classList.toggle("is-live", partyJoined);
   partyJoinButton.textContent = partyJoined ? "同期中" : "参加して同期";
@@ -762,11 +854,13 @@ function renderPartyComments() {
 
   comments.forEach((comment) => {
     const account = findAccount(comment.accountId);
+    const authorName = account.id === "missing" ? comment.authorName || "Unknown" : account.name;
+    const authorHandle = account.id === "missing" ? comment.authorHandle || "unknown" : account.handle;
     const track = getPartyTrack(comment.trackId);
     const row = document.createElement("div");
     row.className = "party-comment";
     row.innerHTML = `<strong></strong><span></span><small></small>`;
-    row.querySelector("strong").textContent = `${account.name} @${account.handle}`;
+    row.querySelector("strong").textContent = `${authorName} @${authorHandle}`;
     row.querySelector("span").textContent = comment.body;
     row.querySelector("small").textContent = `${formatDuration(comment.at || 0)} / ${track ? track.title : "再生曲"}`;
     partyComments.append(row);
@@ -909,10 +1003,11 @@ function playPartyPlayback() {
   state.watchParty.playback = {
     ...playback,
     status: "playing",
-    startedAt: Date.now() - position * 1000,
+    startedAt: getSyncedNow() - position * 1000,
     pausedAt: position,
     updatedAt: new Date().toISOString(),
     updatedBy: account?.id || playback.updatedBy,
+    updatedByName: account?.name || playback.updatedByName,
   };
 
   commitState("party-play");
@@ -931,6 +1026,7 @@ function pausePartyPlayback() {
     pausedAt: getPartyPosition(),
     updatedAt: new Date().toISOString(),
     updatedBy: account?.id || playback.updatedBy,
+    updatedByName: account?.name || playback.updatedByName,
   };
 
   commitState("party-pause");
@@ -944,10 +1040,11 @@ function selectPartyTrack(trackId, shouldPlay) {
   state.watchParty.playback = {
     trackId,
     status: shouldPlay ? "playing" : "paused",
-    startedAt: shouldPlay ? Date.now() : null,
+    startedAt: shouldPlay ? getSyncedNow() : null,
     pausedAt: 0,
     updatedAt: new Date().toISOString(),
     updatedBy: account?.id || state.watchParty.playback.updatedBy,
+    updatedByName: account?.name || state.watchParty.playback.updatedByName,
   };
 
   commitState("party-select");
@@ -987,10 +1084,14 @@ function getPartyPosition() {
   const playback = state.watchParty.playback;
   const duration = getPartyDuration();
   if (playback.status === "playing" && playback.startedAt) {
-    return Math.min(duration, Math.max(0, (Date.now() - playback.startedAt) / 1000));
+    return Math.min(duration, Math.max(0, (getSyncedNow() - playback.startedAt) / 1000));
   }
 
   return Math.min(duration, Math.max(0, playback.pausedAt || 0));
+}
+
+function getSyncedNow() {
+  return Date.now() - partyServerClockOffsetMs;
 }
 
 function updatePartyClock() {
@@ -1405,10 +1506,11 @@ async function playSelectedSpotifyTrack(spotifyTrack, query) {
   state.watchParty.playback = {
     trackId: trackToPlay.id,
     status: "playing",
-    startedAt: Date.now(),
+    startedAt: getSyncedNow(),
     pausedAt: 0,
     updatedAt: new Date().toISOString(),
     updatedBy: getCurrentAccount()?.id || state.watchParty.playback.updatedBy,
+    updatedByName: getCurrentAccount()?.name || state.watchParty.playback.updatedByName,
   };
 
   commitState("spotify-search");
@@ -1743,6 +1845,7 @@ function normalizeWatchParty(value, fallback) {
       trackId: trackExists ? playback.trackId : queue[0]?.id || fallbackPlayback.trackId,
       status: playback.status === "playing" ? "playing" : "paused",
       pausedAt: Number.isFinite(playback.pausedAt) ? playback.pausedAt : 0,
+      updatedByName: playback.updatedByName || "",
     },
     comments: Array.isArray(value.comments) ? value.comments : fallback.comments,
   };
@@ -1759,6 +1862,8 @@ function commitState(reason) {
       state,
     });
   }
+
+  void publishWatchPartyToServer(reason);
 }
 
 function saveState() {
@@ -1839,3 +1944,4 @@ function formatDuration(value) {
 void initSpotifyIntegration();
 render();
 startPartyClock();
+initPartyServerSync();
