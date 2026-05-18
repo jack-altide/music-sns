@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Music SNS</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="メインメニュー">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">ms</div>
+          <div>
+            <p class="eyebrow">Music SNS</p>
+            <h1>SoundCircle</h1>
+          </div>
+        </div>
+
+        <nav class="nav-tabs" aria-label="画面切り替え">
+          <button class="nav-tab is-active" type="button" data-view="timeline">タイムライン</button>
+          <button class="nav-tab" type="button" data-view="party">ウォッチパーティー</button>
+          <button class="nav-tab" type="button" data-view="articles">記事</button>
+          <button class="nav-tab" type="button" data-view="playlist">共同プレイリスト</button>
+        </nav>
+
+        <section class="account-panel" aria-labelledby="account-title">
+          <div class="section-heading">
+            <p class="eyebrow">Account</p>
+            <h2 id="account-title">アカウント</h2>
+          </div>
+
+          <form class="account-form" id="account-form">
+            <label>
+              表示名
+              <input id="account-name" name="name" type="text" maxlength="24" placeholder="例: Rin" required />
+            </label>
+            <label>
+              ID
+              <input id="account-handle" name="handle" type="text" maxlength="18" placeholder="例: rin_vinyl" required />
+            </label>
+            <label>
+              好きなジャンル
+              <select id="account-genre" name="genre">
+                <option>Indie Rock</option>
+                <option>Hip Hop</option>
+                <option>Electronic</option>
+                <option>Jazz</option>
+                <option>J-Pop</option>
+                <option>Ambient</option>
+              </select>
+            </label>
+            <button class="primary-button" type="submit">作成</button>
+          </form>
+
+          <div class="active-account">
+            <p class="muted">操作中のアカウント</p>
+            <select id="account-switcher" aria-label="操作中のアカウント"></select>
+          </div>
+        </section>
+      </aside>
+
+      <main class="main-content">
+        <section class="view is-active" id="timeline-view" aria-labelledby="timeline-title">
+          <div class="topbar">
+            <div>
+              <p class="eyebrow">Timeline</p>
+              <h2 id="timeline-title">いま聴いている音楽とライブ情報</h2>
+            </div>
+            <button class="ghost-button" id="reset-data" type="button">デモデータに戻す</button>
+          </div>
+
+          <form class="composer" id="post-form">
+            <div class="composer-header">
+              <div>
+                <p class="eyebrow">Share</p>
+                <h3>投稿する</h3>
+              </div>
+              <div class="segmented-control" role="tablist" aria-label="投稿タイプ">
+                <button class="segment is-active" type="button" data-post-type="music">音楽</button>
+                <button class="segment" type="button" data-post-type="live">ライブ</button>
+              </div>
+            </div>
+
+            <input type="hidden" id="post-type" value="music" />
+            <div class="form-grid">
+              <label class="music-field">
+                曲名
+                <input id="track-title" name="trackTitle" type="text" maxlength="60" placeholder="例: Night Walk" />
+              </label>
+              <label class="music-field">
+                アーティスト
+                <input id="track-artist" name="trackArtist" type="text" maxlength="60" placeholder="例: Blue Harbor" />
+              </label>
+              <label class="music-field wide">
+                音源URL任意
+                <input id="track-audio" name="trackAudio" type="url" placeholder="https://example.com/preview.mp3" />
+              </label>
+
+              <label class="live-field is-hidden">
+                イベント名
+                <input id="live-title" name="liveTitle" type="text" maxlength="80" placeholder="例: Friday Session" />
+              </label>
+              <label class="live-field is-hidden">
+                日時
+                <input id="live-date" name="liveDate" type="datetime-local" />
+              </label>
+              <label class="live-field wide is-hidden">
+                会場
+                <input id="live-venue" name="liveVenue" type="text" maxlength="80" placeholder="例: Shibuya Room" />
+              </label>
+
+              <label class="wide">
+                コメント
+                <textarea id="post-body" name="body" rows="3" maxlength="180" placeholder="いまの気分やおすすめポイント"></textarea>
+              </label>
+            </div>
+            <button class="primary-button" type="submit">投稿</button>
+          </form>
+
+          <div class="timeline-list" id="timeline-list" aria-live="polite"></div>
+        </section>
+
+        <section class="view" id="party-view" aria-labelledby="party-title">
+          <div class="topbar">
+            <div>
+              <p class="eyebrow">Watch Party</p>
+              <h2 id="party-title">フェス予習ウォッチパーティー</h2>
+            </div>
+            <span class="status-pill" id="party-status">未参加</span>
+          </div>
+
+          <div class="party-layout">
+            <section class="party-player" aria-label="同期プレイヤー">
+              <div class="party-art" id="party-art" aria-hidden="true">
+                <div class="vinyl-disc"></div>
+              </div>
+              <div class="party-player-main">
+                <p class="eyebrow" id="party-room-name"></p>
+                <h3 id="party-track-title"></h3>
+                <p class="muted" id="party-track-meta"></p>
+                <div class="party-progress" aria-hidden="true">
+                  <span id="party-progress-bar"></span>
+                </div>
+                <div class="party-time">
+                  <span id="party-elapsed">0:00</span>
+                  <span id="party-duration">0:36</span>
+                </div>
+                <div class="party-controls">
+                  <button class="primary-button" id="party-join" type="button">参加して同期</button>
+                  <button class="ghost-button" id="party-play" type="button">再生</button>
+                  <button class="ghost-button" id="party-next" type="button">次の曲</button>
+                </div>
+              </div>
+            </section>
+
+            <aside class="party-chat-panel" aria-label="ウォッチパーティーコメント">
+              <div class="section-heading">
+                <p class="eyebrow">Live Comments</p>
+                <h3>参加者コメント</h3>
+              </div>
+              <div class="party-comments" id="party-comments" aria-live="polite"></div>
+              <form class="party-comment-form" id="party-comment-form">
+                <input id="party-comment-input" type="text" maxlength="140" placeholder="曲を聴きながらコメント" required />
+                <button class="primary-button" type="submit">送信</button>
+              </form>
+            </aside>
+          </div>
+
+          <section class="spotify-panel" aria-labelledby="spotify-title">
+            <div class="section-heading">
+              <p class="eyebrow">Spotify</p>
+              <h3 id="spotify-title">Spotify連携</h3>
+            </div>
+            <p class="muted" id="spotify-status">未接続</p>
+            <div class="spotify-redirect">
+              <span>Redirect URI</span>
+              <code id="spotify-redirect-uri"></code>
+            </div>
+            <form class="spotify-client-form" id="spotify-client-form">
+              <label>
+                Client ID
+                <input id="spotify-client-id" type="text" autocomplete="off" placeholder="SpotifyアプリのClient ID" />
+              </label>
+              <button class="primary-button" type="submit">Spotifyに接続</button>
+            </form>
+            <div class="spotify-actions">
+              <button class="ghost-button" id="spotify-ready" type="button">プレイヤー準備</button>
+              <button class="primary-button" id="spotify-lilac" type="button">ライラックを検索して再生</button>
+            </div>
+          </section>
+
+          <section class="composer compact" aria-labelledby="party-add-title">
+            <div class="composer-header">
+              <div>
+                <p class="eyebrow">Festival Queue</p>
+                <h3 id="party-add-title">流れそうな曲を追加</h3>
+              </div>
+            </div>
+            <form id="party-track-form">
+              <div class="form-grid">
+                <label>
+                  曲名
+                  <input id="party-track-input" type="text" maxlength="60" placeholder="例: Sunset Gate" required />
+                </label>
+                <label>
+                  アーティスト
+                  <input id="party-artist-input" type="text" maxlength="60" placeholder="例: North Pier" required />
+                </label>
+                <label class="wide">
+                  予想メモ
+                  <input id="party-note-input" type="text" maxlength="90" placeholder="どのステージや時間帯で流れそうか" />
+                </label>
+              </div>
+              <button class="primary-button" type="submit">キューに追加</button>
+            </form>
+          </section>
+
+          <div class="party-queue" id="party-queue"></div>
+        </section>
+
+        <section class="view" id="articles-view" aria-labelledby="articles-title">
+          <div class="topbar">
+            <div>
+              <p class="eyebrow">Articles</p>
+              <h2 id="articles-title">音楽記事とコメント</h2>
+            </div>
+          </div>
+          <div class="article-grid" id="article-grid"></div>
+        </section>
+
+        <section class="view" id="playlist-view" aria-labelledby="playlist-title">
+          <div class="topbar">
+            <div>
+              <p class="eyebrow">Collaborative Playlist</p>
+              <h2 id="playlist-title">みんなで作るプレイリスト</h2>
+            </div>
+          </div>
+
+          <section class="playlist-hero" aria-label="共同プレイリスト概要">
+            <div class="playlist-cover" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            <div class="playlist-summary">
+              <p class="eyebrow">Open Mix</p>
+              <h3>Weekend Listening Board</h3>
+              <p id="playlist-stats"></p>
+            </div>
+          </section>
+
+          <form class="composer compact" id="playlist-form">
+            <div class="composer-header">
+              <div>
+                <p class="eyebrow">Add Track</p>
+                <h3>曲を追加</h3>
+              </div>
+            </div>
+            <div class="form-grid">
+              <label>
+                曲名
+                <input id="playlist-title-input" type="text" maxlength="60" placeholder="例: After Hours" required />
+              </label>
+              <label>
+                アーティスト
+                <input id="playlist-artist-input" type="text" maxlength="60" placeholder="例: Metro Line" required />
+              </label>
+              <label class="wide">
+                メモ
+                <input id="playlist-note-input" type="text" maxlength="90" placeholder="この曲を入れたい理由" />
+              </label>
+            </div>
+            <button class="primary-button" type="submit">追加</button>
+          </form>
+
+          <div class="track-table" id="playlist-tracks"></div>
+        </section>
+      </main>
+    </div>
+
+    <template id="post-template">
+      <article class="post-card">
+        <div class="post-cover" aria-hidden="true"></div>
+        <div class="post-body">
+          <header class="post-header">
+            <div>
+              <h3></h3>
+              <p class="muted"></p>
+            </div>
+            <span class="post-type"></span>
+          </header>
+          <p class="post-text"></p>
+          <div class="post-actions"></div>
+        </div>
+      </article>
+    </template>
+
+    <script src="app.js"></script>
+  </body>
+</html>
