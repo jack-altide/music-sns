@@ -221,6 +221,8 @@ const spotifyStatus = document.querySelector("#spotify-status");
 const spotifyRedirectUri = document.querySelector("#spotify-redirect-uri");
 const spotifyClientForm = document.querySelector("#spotify-client-form");
 const spotifyClientIdInput = document.querySelector("#spotify-client-id");
+const spotifySearchForm = document.querySelector("#spotify-search-form");
+const spotifySearchInput = document.querySelector("#spotify-search-input");
 const spotifyReadyButton = document.querySelector("#spotify-ready");
 const spotifyLilacButton = document.querySelector("#spotify-lilac");
 
@@ -444,6 +446,20 @@ spotifyReadyButton.addEventListener("click", async () => {
     await prepareSpotifyPlayer();
   } catch (errorObject) {
     spotifyStatusMessage = `Spotifyプレイヤー準備に失敗しました: ${errorObject.message}`;
+    renderSpotifyPanel();
+  }
+});
+
+spotifySearchForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const query = spotifySearchInput.value.trim();
+  if (!query) return;
+
+  try {
+    await addSpotifySearchToPartyAndPlay(query);
+  } catch (errorObject) {
+    spotifyStatusMessage = `Spotify検索に失敗しました: ${errorObject.message}`;
     renderSpotifyPanel();
   }
 });
@@ -1345,7 +1361,7 @@ async function prepareSpotifyPlayer() {
   return spotifyInitPromise;
 }
 
-async function addLilacToPartyAndPlay() {
+async function addSpotifySearchToPartyAndPlay(query) {
   const clientId = spotifyClientIdInput.value.trim() || localStorage.getItem(SPOTIFY_KEYS.clientId);
   if (clientId) {
     localStorage.setItem(SPOTIFY_KEYS.clientId, clientId);
@@ -1365,17 +1381,17 @@ async function addLilacToPartyAndPlay() {
   const prepared = await prepareSpotifyPlayer();
   if (!prepared) return;
 
-  spotifyStatusMessage = "Mrs. GREEN APPLEのライラックを検索しています。";
+  spotifyStatusMessage = `Spotifyで「${query}」を検索しています。`;
   renderSpotifyPanel();
 
-  const spotifyTrack = await searchSpotifyTrack("ライラック Mrs. GREEN APPLE");
+  const spotifyTrack = await searchSpotifyTrack(query);
   if (!spotifyTrack) {
-    spotifyStatusMessage = "ライラックが見つかりませんでした。";
+    spotifyStatusMessage = `「${query}」に一致する曲が見つかりませんでした。`;
     renderSpotifyPanel();
     return;
   }
 
-  const partyTrack = makePartyTrackFromSpotify(spotifyTrack);
+  const partyTrack = makePartyTrackFromSpotify(spotifyTrack, query);
   const existingTrack = state.watchParty.queue.find((track) => track.spotifyUri === partyTrack.spotifyUri);
   const trackToPlay = existingTrack || partyTrack;
 
@@ -1393,10 +1409,15 @@ async function addLilacToPartyAndPlay() {
     updatedBy: getCurrentAccount()?.id || state.watchParty.playback.updatedBy,
   };
 
-  commitState("spotify-lilac");
+  commitState("spotify-search");
+  spotifySearchInput.value = query;
   render();
   syncPartyAudio();
   setView("party");
+}
+
+async function addLilacToPartyAndPlay() {
+  await addSpotifySearchToPartyAndPlay("ライラック Mrs. GREEN APPLE");
 }
 
 async function searchSpotifyTrack(query) {
@@ -1410,21 +1431,15 @@ async function searchSpotifyTrack(query) {
   );
 
   const tracks = response.tracks?.items || [];
-  return (
-    tracks.find((track) => {
-      const nameMatches = track.name.toLowerCase().includes("ライラック") || track.name.toLowerCase().includes("lilac");
-      const artistMatches = track.artists.some((artist) => artist.name.toLowerCase().includes("mrs. green apple"));
-      return nameMatches && artistMatches;
-    }) || tracks[0]
-  );
+  return tracks[0] || null;
 }
 
-function makePartyTrackFromSpotify(track) {
+function makePartyTrackFromSpotify(track, query) {
   return {
     id: `spotify-${track.id}`,
     title: track.name,
     artist: track.artists.map((artist) => artist.name).join(", "),
-    note: "Spotifyから追加: Mrs. GREEN APPLEのライラック",
+    note: `Spotifyから追加: ${query}`,
     audioUrl: "",
     spotifyUri: track.uri,
     spotifyUrl: track.external_urls?.spotify || "",

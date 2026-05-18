@@ -15,6 +15,7 @@
 - Spotify Authorization Code with PKCE によるブラウザ認証
 - Spotify Web Playback SDKでのブラウザ内プレイヤー作成
 - Spotify検索APIでMrs. GREEN APPLE「ライラック」を検索してウォッチパーティーで再生
+- Spotify検索APIで任意の曲名やアーティスト名を検索してウォッチパーティーで再生
 - `localStorage` によるローカル保存
 
 ## 使い方

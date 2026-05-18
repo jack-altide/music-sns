@@ -607,7 +607,8 @@ textarea:focus {
   padding: 18px;
 }
 
-.spotify-client-form {
+.spotify-client-form,
+.spotify-search-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
@@ -871,7 +872,8 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
-  .spotify-client-form {
+  .spotify-client-form,
+  .spotify-search-form {
     grid-template-columns: 1fr;
   }
 
