@@ -609,6 +609,39 @@ GitHubからpullできない:
 - さくらVPSのパケットフィルターでTCP 5173が許可されているか確認する
 - SpotifyのエラーならRedirect URIがHTTPSの公開URL、`https://160.16.213.245.sslip.io/` と完全一致しているか確認する
 
+HTTPS URLで `Service Unavailable` や「一時的に利用できない」という表示になる:
+
+この場合、ApacheやHTTPSまでは動いていますが、裏側のNode.jsアプリ `http://127.0.0.1:5173/` にApacheが接続できていない可能性が高いです。容量不足ではなく、Nodeサービス停止やsystemd設定ミスが原因になりやすいです。
+
+まず確認します。
+
+```bash
+ssh ubuntu@160.16.213.245
+
+sudo systemctl status music-sns --no-pager
+curl -i http://127.0.0.1:5173/api/health
+sudo ss -ltnp | grep 5173
+```
+
+`curl` で `{"ok":true,...}` が返らない場合は、Nodeアプリ側が動いていません。以下で復旧します。
+
+```bash
+cd ~/music-sns
+git pull origin main
+npm run check
+sudo systemctl restart music-sns
+sudo systemctl status music-sns --no-pager
+curl -i http://127.0.0.1:5173/api/health
+```
+
+最後の `curl` で `{"ok":true,...}` が返れば、ブラウザで開き直します。
+
+```text
+https://160.16.213.245.sslip.io/
+```
+
+`Unit music-sns.service could not be found` と出る場合は、systemdサービスがまだ作成されていません。上の「systemdで常駐化する」手順を先に実行してください。
+
 ## 同期仕様
 
 ウォッチパーティーの再生状態、曲キュー、コメントはNode.jsサーバーのメモリ上で共有されます。サーバーは `server-state.json` に状態を保存するため、プロセス再起動後も最後の状態を復元できます。
