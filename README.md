@@ -79,6 +79,16 @@ http://160.16.213.245:5173/
 
 このアプリを複数端末で同期させる場合は、Pythonの静的サーバーではなくNode.jsサーバーを使ってください。Node.jsサーバーは静的ファイル配信、ウォッチパーティー状態API、Server-Sent Eventsによるリアルタイム配信を行います。
 
+### 授業PDFのさくらVPSを使う場合
+
+PDFの手順で作成したさくらVPSはUbuntu 24.04とApacheの実習環境を前提にしています。このアプリはNode.jsサーバーで動かすため、SSHログインとUbuntu上の作業はそのまま使えますが、Apache、`public_html`、CGI、SQLiteの手順は必須ではありません。
+
+- 最初のログインユーザーが `ubuntu` の場合は `ssh ubuntu@160.16.213.245` で入ります。別ユーザーで配置する場合は、以下の `<user>` をそのユーザー名に置き換えてください。
+- PDFでApacheを入れていても、Node.jsを `5173` 番で動かすだけなら共存できます。Apacheは通常 `80` 番を使うため、このREADMEの `5173` 番起動とは競合しません。
+- `http://160.16.213.245:5173/` で直接公開する場合は、Ubuntu側のファイアウォールに加えて、さくらVPSのパケットフィルターでもTCP `5173` をカスタム許可してください。
+- Apache経由で `http://160.16.213.245/` に出したい場合は、Apacheのリバースプロキシ設定が別途必要です。その場合はSpotify Developer DashboardのRedirect URIも `http://160.16.213.245/` に変わります。
+- systemdの `WorkingDirectory=/home/<user>/music-sns` と `User=<user>` は、実際にリポジトリを置いたユーザーに合わせてください。
+
 ### 1. サーバーへログインする
 
 ```bash
