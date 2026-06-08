@@ -642,6 +642,64 @@ https://160.16.213.245.sslip.io/
 
 `Unit music-sns.service could not be found` と出る場合は、systemdサービスがまだ作成されていません。上の「systemdで常駐化する」手順を先に実行してください。
 
+`Unit music-sns.service could not be found` と出たときの作成手順:
+
+まず、サーバー上でリポジトリの場所と `npm` の場所を確認します。
+
+```bash
+cd ~/music-sns
+pwd
+npm run check
+which npm
+```
+
+`pwd` が `/home/ubuntu/music-sns`、`which npm` が `/usr/bin/npm` なら、以下の内容でサービスファイルを作成します。
+
+```bash
+sudo nano /etc/systemd/system/music-sns.service
+```
+
+```ini
+[Unit]
+Description=Music SNS prototype
+After=network.target
+
+[Service]
+WorkingDirectory=/home/ubuntu/music-sns
+Environment=HOST=127.0.0.1
+Environment=PORT=5173
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=3
+User=ubuntu
+
+[Install]
+WantedBy=multi-user.target
+```
+
+保存したら、systemdに読み込ませて起動します。
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now music-sns
+sudo systemctl status music-sns --no-pager
+curl -i http://127.0.0.1:5173/api/health
+```
+
+`curl` で `{"ok":true,...}` が返ればNode側は起動できています。最後にApacheを再読み込みします。
+
+```bash
+sudo systemctl reload apache2
+```
+
+その後、ブラウザで開き直します。
+
+```text
+https://160.16.213.245.sslip.io/
+```
+
+`which npm` が `/usr/bin/npm` 以外の場合は、サービスファイルの `ExecStart=/usr/bin/npm start` を、`which npm` で表示されたパスに変更してください。
+
 ## 同期仕様
 
 ウォッチパーティーの再生状態、曲キュー、コメントはNode.jsサーバーのメモリ上で共有されます。サーバーは `server-state.json` に状態を保存するため、プロセス再起動後も最後の状態を復元できます。
