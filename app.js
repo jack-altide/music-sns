@@ -1,6 +1,9 @@
 const STORAGE_KEY = "music-sns-state-v1";
 const PARTY_CHANNEL_NAME = "music-sns-watch-party";
 const PARTY_DURATION = 36;
+const SPOTIFY_CONTENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const AUDIO_FILE_URL_PATTERN = /https?:\/\/\S+\.(?:mp3|m4a|aac|wav|flac|ogg)(?:[?#]\S*)?/i;
+const LYRICS_MARKER_PATTERN = /(?:^|\s)(?:歌詞|lyrics?)\s*[:：]/i;
 const AudioContextClass = window.AudioContext || window.webkitAudioContext;
 const SPOTIFY_SCOPES = [
   "streaming",
@@ -43,7 +46,6 @@ const seedState = {
       track: {
         title: "Night Walk",
         artist: "Blue Harbor",
-        audioUrl: "",
       },
     },
     {
@@ -124,21 +126,18 @@ const seedState = {
         title: "Sunset Gate",
         artist: "North Pier",
         note: "夕方のメインステージで流れそう。",
-        audioUrl: "",
       },
       {
         id: "party-track-2",
         title: "Neon Tent",
         artist: "Soda Line",
         note: "深夜テントの転換中に合いそう。",
-        audioUrl: "",
       },
       {
         id: "party-track-3",
         title: "River Crowd",
         artist: "Mellow Flags",
         note: "開場直後の空気に合う予想曲。",
-        audioUrl: "",
       },
     ],
     playback: {
@@ -171,6 +170,7 @@ const seedState = {
 };
 
 let state = loadState();
+saveState();
 let audioContext;
 let activeOscillators = [];
 let partyJoined = false;
@@ -190,6 +190,10 @@ let spotifyDeviceId = "";
 let spotifyReady = false;
 let spotifyStatusMessage = "未接続";
 let spotifyInitPromise = null;
+let pendingSpotifyPlaybackAction = "";
+let localSpotifyPlaybackSignature = "";
+const spotifyTrackDetailsCache = new Map();
+const spotifyTrackDetailsRequests = new Map();
 
 const views = {
   timeline: document.querySelector("#timeline-view"),
@@ -301,12 +305,12 @@ postForm.addEventListener("submit", (event) => {
   if (type === "music") {
     const title = document.querySelector("#track-title").value.trim();
     const artist = document.querySelector("#track-artist").value.trim();
-    const audioUrl = document.querySelector("#track-audio").value.trim();
     if (!title || !artist) {
       alert("曲名とアーティストを入力してください。");
       return;
     }
-    post.track = { title, artist, audioUrl };
+    if (!ensureUserContentAllowed(body, title, artist)) return;
+    post.track = { title, artist };
   } else {
     const title = document.querySelector("#live-title").value.trim();
     const date = document.querySelector("#live-date").value;
@@ -315,6 +319,7 @@ postForm.addEventListener("submit", (event) => {
       alert("イベント名、日時、会場を入力してください。");
       return;
     }
+    if (!ensureUserContentAllowed(body, title, venue)) return;
     post.live = { title, date, venue };
   }
 
@@ -338,6 +343,7 @@ playlistForm.addEventListener("submit", (event) => {
   const artist = document.querySelector("#playlist-artist-input").value.trim();
   const note = document.querySelector("#playlist-note-input").value.trim();
   if (!title || !artist) return;
+  if (!ensureUserContentAllowed(title, artist, note)) return;
 
   state.playlist.tracks.push({
     id: makeId("track"),
@@ -365,9 +371,16 @@ partyPlayButton.addEventListener("click", () => {
   ensureAudioContext();
 
   const playback = state.watchParty.playback;
-  if (playback.status === "playing") {
+  const track = getPartyTrack(playback.trackId);
+  if (shouldStartSpotifyLocally(track, playback)) {
+    markSpotifyPlaybackAction("play");
+    syncPartyAudio();
+    renderParty();
+  } else if (playback.status === "playing") {
+    markSpotifyPlaybackAction("pause");
     pausePartyPlayback();
   } else {
+    markSpotifyPlaybackAction("play");
     playPartyPlayback();
   }
 });
@@ -375,6 +388,7 @@ partyPlayButton.addEventListener("click", () => {
 partyNextButton.addEventListener("click", () => {
   partyJoined = true;
   ensureAudioContext();
+  markSpotifyPlaybackAction("play");
   advancePartyTrack(false);
 });
 
@@ -390,6 +404,7 @@ partyCommentForm.addEventListener("submit", (event) => {
   const input = document.querySelector("#party-comment-input");
   const body = input.value.trim();
   if (!body) return;
+  if (!ensureUserContentAllowed(body)) return;
 
   const playback = state.watchParty.playback;
   state.watchParty.comments.push({
@@ -421,13 +436,13 @@ partyTrackForm.addEventListener("submit", (event) => {
   const artist = document.querySelector("#party-artist-input").value.trim();
   const note = document.querySelector("#party-note-input").value.trim();
   if (!title || !artist) return;
+  if (!ensureUserContentAllowed(title, artist, note)) return;
 
   state.watchParty.queue.push({
     id: makeId("party-track"),
     title,
     artist,
     note: note || `${account.name}がフェス予習用に追加`,
-    audioUrl: "",
   });
 
   partyTrackForm.reset();
@@ -701,6 +716,7 @@ function renderArticles() {
       const input = event.currentTarget.querySelector("input");
       const body = input.value.trim();
       if (!body) return;
+      if (!ensureUserContentAllowed(body)) return;
 
       article.comments.push({
         id: makeId("comment"),
@@ -802,7 +818,11 @@ function renderParty() {
   partyStatus.textContent = partyJoined ? "同期中" : "未参加";
   partyStatus.classList.toggle("is-live", partyJoined);
   partyJoinButton.textContent = partyJoined ? "同期中" : "参加して同期";
-  partyPlayButton.textContent = playback.status === "playing" ? "一時停止" : "再生";
+  partyPlayButton.textContent = shouldStartSpotifyLocally(track, playback)
+    ? "自分で再生"
+    : playback.status === "playing"
+      ? "一時停止"
+      : "再生";
   partyDuration.textContent = formatDuration(getPartyDuration(track));
   renderPartyCover(track);
 
@@ -814,14 +834,44 @@ function renderParty() {
 function renderPartyCover(track) {
   if (!partyArt) return;
 
-  if (track?.imageUrl) {
-    partyArt.classList.add("has-cover");
-    partyArt.style.backgroundImage = `linear-gradient(rgba(23, 22, 20, 0.16), rgba(23, 22, 20, 0.34)), url("${track.imageUrl}")`;
+  partyArt.innerHTML = "";
+  partyArt.classList.remove("has-cover", "has-spotify-cover");
+  partyArt.style.backgroundImage = "";
+
+  if (track?.source === "spotify") {
+    partyArt.classList.add("has-spotify-cover");
+
+    const details = getCachedSpotifyTrackDetails(track);
+    if (details?.imageUrl) {
+      partyArt.classList.add("has-cover");
+      const image = document.createElement("img");
+      image.src = details.imageUrl;
+      image.alt = "";
+      partyArt.append(image);
+    } else {
+      const placeholder = document.createElement("div");
+      placeholder.className = "spotify-cover-placeholder";
+      placeholder.textContent = "Spotify";
+      partyArt.append(placeholder);
+      void hydrateSpotifyTrackDetails(track);
+    }
+
+    const spotifyUrl = details?.spotifyUrl || track.spotifyUrl;
+    if (spotifyUrl) {
+      const link = document.createElement("a");
+      link.className = "spotify-attribution";
+      link.href = spotifyUrl;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "Spotifyで開く";
+      partyArt.append(link);
+    }
     return;
   }
 
-  partyArt.classList.remove("has-cover");
-  partyArt.style.backgroundImage = "";
+  const disc = document.createElement("div");
+  disc.className = "vinyl-disc";
+  partyArt.append(disc);
 }
 
 function renderSpotifyPanel() {
@@ -894,10 +944,20 @@ function renderPartyQueue() {
     row.querySelector(".track-number").textContent = index + 1;
     row.querySelector(".track-title strong").textContent = track.title;
     row.querySelector(".track-title span").textContent = `${track.artist}${track.note ? ` / ${track.note}` : ""}`;
-    row.querySelector(".track-added").textContent = track.id === state.watchParty.playback.trackId ? "再生中" : "待機中";
+    const status = row.querySelector(".track-added");
+    status.textContent = track.id === state.watchParty.playback.trackId ? "再生中" : "待機中";
+    if (track.source === "spotify" && track.spotifyUrl) {
+      const link = document.createElement("a");
+      link.href = track.spotifyUrl;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "Spotify";
+      status.append(" / ", link);
+    }
     row.querySelector("button").addEventListener("click", () => {
       partyJoined = true;
       ensureAudioContext();
+      markSpotifyPlaybackAction("play");
       selectPartyTrack(track.id, true);
     });
 
@@ -909,18 +969,10 @@ function createPlayControl(post) {
   const button = document.createElement("button");
   button.className = "icon-button";
   button.type = "button";
-  button.setAttribute("aria-label", "音源を再生");
-  button.textContent = "▶ 再生";
+  button.setAttribute("aria-label", "デモ音源を再生");
+  button.textContent = "▶ デモ";
 
   button.addEventListener("click", () => {
-    if (post.track.audioUrl) {
-      const audio = new Audio(post.track.audioUrl);
-      audio.play().catch(() => {
-        alert("音源URLを再生できませんでした。URLを確認してください。");
-      });
-      return;
-    }
-
     playGeneratedPreview(post.track.title + post.track.artist);
   });
 
@@ -970,7 +1022,6 @@ function createPartyShortcut(track) {
       title: track.title,
       artist: track.artist,
       note: "タイムラインからフェス予習キューへ追加",
-      audioUrl: track.audioUrl || "",
     });
     commitState("party-track");
     renderParty();
@@ -992,6 +1043,89 @@ function createEmptyState(message) {
   empty.className = "empty-state";
   empty.textContent = message;
   return empty;
+}
+
+function ensureUserContentAllowed(...values) {
+  const violation = values.map(getContentPolicyViolation).find(Boolean);
+  if (!violation) return true;
+
+  alert(violation);
+  return false;
+}
+
+function getContentPolicyViolation(value) {
+  const text = String(value || "");
+  if (AUDIO_FILE_URL_PATTERN.test(text)) {
+    return "音源ファイルURLは投稿できません。権利処理済みのSpotify連携またはデモ音源を使ってください。";
+  }
+
+  if (LYRICS_MARKER_PATTERN.test(text)) {
+    return "歌詞本文の投稿はできません。曲名や感想として共有してください。";
+  }
+
+  return "";
+}
+
+function markSpotifyPlaybackAction(action) {
+  pendingSpotifyPlaybackAction = action;
+}
+
+function consumeSpotifyPlaybackAction() {
+  const action = pendingSpotifyPlaybackAction;
+  pendingSpotifyPlaybackAction = "";
+  return action;
+}
+
+function shouldStartSpotifyLocally(track, playback) {
+  if (!track?.spotifyUri || playback.status !== "playing") return false;
+  return localSpotifyPlaybackSignature !== getSpotifyPlaybackSignature(track, playback);
+}
+
+function getSpotifyPlaybackSignature(track, playback) {
+  return `${track.spotifyUri || track.id}-${playback.startedAt || playback.pausedAt || 0}`;
+}
+
+function getCachedSpotifyTrackDetails(track) {
+  const spotifyId = getSpotifyTrackId(track);
+  return spotifyId ? spotifyTrackDetailsCache.get(spotifyId) : null;
+}
+
+async function hydrateSpotifyTrackDetails(track) {
+  const spotifyId = getSpotifyTrackId(track);
+  if (!spotifyId || spotifyTrackDetailsRequests.has(spotifyId)) return;
+
+  const cached = spotifyTrackDetailsCache.get(spotifyId);
+  if (cached?.failedAt && Date.now() - cached.failedAt < 5 * 60 * 1000) return;
+
+  const request = spotifyApiFetch(`/tracks/${encodeURIComponent(spotifyId)}?market=JP`)
+    .then((details) => {
+      spotifyTrackDetailsCache.set(spotifyId, {
+        imageUrl: details.album?.images?.[0]?.url || "",
+        spotifyUrl: details.external_urls?.spotify || track.spotifyUrl || "",
+        fetchedAt: Date.now(),
+      });
+      renderParty();
+    })
+    .catch(() => {
+      spotifyTrackDetailsCache.set(spotifyId, { failedAt: Date.now() });
+    })
+    .finally(() => {
+      spotifyTrackDetailsRequests.delete(spotifyId);
+    });
+
+  spotifyTrackDetailsRequests.set(spotifyId, request);
+  await request;
+}
+
+function getSpotifyTrackId(track) {
+  if (!track) return "";
+  if (track.spotifyId) return String(track.spotifyId);
+
+  const uriMatch = String(track.spotifyUri || "").match(/^spotify:track:([A-Za-z0-9]+)$/);
+  if (uriMatch) return uriMatch[1];
+
+  const idMatch = String(track.id || "").match(/^spotify-([A-Za-z0-9]+)$/);
+  return idMatch ? idMatch[1] : "";
 }
 
 function playPartyPlayback() {
@@ -1116,11 +1250,42 @@ function startPartyClock() {
 function syncPartyAudio() {
   const playback = state.watchParty.playback;
   const track = getPartyTrack(playback.trackId);
+  const spotifyAction = consumeSpotifyPlaybackAction();
 
-  if (!partyJoined || playback.status !== "playing" || !track) {
-    if (partyJoined && track?.spotifyUri) {
-      void pauseSpotifyPlayback();
+  if (!partyJoined || !track) {
+    stopPartyAudio();
+    return;
+  }
+
+  if (track.spotifyUri) {
+    stopPartyAudio();
+
+    const signature = getSpotifyPlaybackSignature(track, playback);
+    if (playback.status !== "playing") {
+      if (spotifyAction === "pause") {
+        localSpotifyPlaybackSignature = "";
+        partyAudioSignature = "";
+        void pauseSpotifyPlayback();
+      }
+      return;
     }
+
+    if (spotifyAction === "play") {
+      localSpotifyPlaybackSignature = signature;
+      partyAudioSignature = signature;
+      void playSpotifyTrack(track, getPartyPosition());
+      return;
+    }
+
+    if (partyAudioSignature !== signature) {
+      partyAudioSignature = signature;
+      spotifyStatusMessage = "共有中の曲は、各参加者が自分のSpotifyで再生します。";
+      renderSpotifyPanel();
+    }
+    return;
+  }
+
+  if (playback.status !== "playing") {
     stopPartyAudio();
     return;
   }
@@ -1130,22 +1295,6 @@ function syncPartyAudio() {
 
   stopPartyAudio();
   partyAudioSignature = signature;
-
-  if (track.spotifyUri) {
-    void playSpotifyTrack(track, getPartyPosition());
-    return;
-  }
-
-  if (track.audioUrl) {
-    partyAudioElement = new Audio(track.audioUrl);
-    partyAudioElement.loop = true;
-    partyAudioElement.currentTime = getPartyPosition() % getPartyDuration(track);
-    partyAudioElement.play().catch(() => {
-      alert("音源URLを再生できませんでした。デモ音源で同期します。");
-      startGeneratedPartyLoop(track);
-    });
-    return;
-  }
 
   startGeneratedPartyLoop(track);
 }
@@ -1495,7 +1644,9 @@ async function playSelectedSpotifyTrack(spotifyTrack, query) {
   if (!prepared) return;
 
   const partyTrack = makePartyTrackFromSpotify(spotifyTrack, query);
-  const existingTrack = state.watchParty.queue.find((track) => track.spotifyUri === partyTrack.spotifyUri);
+  const existingTrack = state.watchParty.queue.find(
+    (track) => track.spotifyUri === partyTrack.spotifyUri || track.spotifyId === partyTrack.spotifyId,
+  );
   const trackToPlay = existingTrack || partyTrack;
 
   if (!existingTrack) {
@@ -1503,6 +1654,7 @@ async function playSelectedSpotifyTrack(spotifyTrack, query) {
   }
 
   partyJoined = true;
+  markSpotifyPlaybackAction("play");
   state.watchParty.playback = {
     trackId: trackToPlay.id,
     status: "playing",
@@ -1552,6 +1704,7 @@ function renderSpotifyResults(tracks, query) {
     const title = document.createElement("div");
     const name = document.createElement("strong");
     const meta = document.createElement("span");
+    const spotifyLink = document.createElement("a");
     const button = document.createElement("button");
 
     row.className = "spotify-result";
@@ -1560,6 +1713,11 @@ function renderSpotifyResults(tracks, query) {
     image.src = track.album?.images?.[2]?.url || track.album?.images?.[0]?.url || "";
     name.textContent = track.name;
     meta.textContent = `${track.artists.map((artist) => artist.name).join(", ")} / ${track.album?.name || "Spotify"}`;
+    spotifyLink.className = "spotify-content-link";
+    spotifyLink.href = track.external_urls?.spotify || "#";
+    spotifyLink.target = "_blank";
+    spotifyLink.rel = "noopener noreferrer";
+    spotifyLink.textContent = "Spotifyで開く";
     button.className = "icon-button";
     button.type = "button";
     button.textContent = "再生";
@@ -1572,24 +1730,25 @@ function renderSpotifyResults(tracks, query) {
       }
     });
 
-    title.append(name, meta);
+    title.append(name, meta, spotifyLink);
     row.append(image, title, button);
     spotifyResults.append(row);
   });
 }
 
 function makePartyTrackFromSpotify(track, query) {
+  const artist = track.artists.map((item) => item.name).join(", ");
   return {
     id: `spotify-${track.id}`,
     title: track.name,
-    artist: track.artists.map((artist) => artist.name).join(", "),
+    artist,
     note: `Spotifyから追加: ${query}`,
-    audioUrl: "",
+    source: "spotify",
+    spotifyId: track.id,
     spotifyUri: track.uri,
     spotifyUrl: track.external_urls?.spotify || "",
-    imageUrl: track.album?.images?.[0]?.url || "",
     durationMs: track.duration_ms,
-    source: "spotify",
+    spotifyAddedAt: new Date().toISOString(),
   };
 }
 
@@ -1811,9 +1970,9 @@ function normalizeState(value) {
   const next = {
     currentAccountId: value.currentAccountId || fallback.currentAccountId,
     accounts: Array.isArray(value.accounts) && value.accounts.length ? value.accounts : fallback.accounts,
-    posts: Array.isArray(value.posts) ? value.posts : fallback.posts,
-    articles: Array.isArray(value.articles) ? value.articles : fallback.articles,
-    playlist: value.playlist?.tracks ? value.playlist : fallback.playlist,
+    posts: Array.isArray(value.posts) ? value.posts.map(normalizePost).filter(Boolean) : fallback.posts,
+    articles: Array.isArray(value.articles) ? value.articles.map(normalizeArticle).filter(Boolean) : fallback.articles,
+    playlist: normalizePlaylist(value.playlist, fallback.playlist),
     watchParty: normalizeWatchParty(value.watchParty, fallback.watchParty),
   };
 
@@ -1824,31 +1983,229 @@ function normalizeState(value) {
   return next;
 }
 
+function normalizePost(post) {
+  if (!post || typeof post !== "object") return null;
+  const body = normalizeText(post.body, 280);
+  if (getContentPolicyViolation(body)) return null;
+
+  if (post.type === "music" && post.track) {
+    const title = normalizeText(post.track.title, 80);
+    const artist = normalizeText(post.track.artist, 80);
+    if (!title || !artist || getContentPolicyViolation(title) || getContentPolicyViolation(artist)) return null;
+
+    return {
+      ...post,
+      type: "music",
+      body,
+      track: {
+        title,
+        artist,
+      },
+    };
+  }
+
+  if (post.type === "live" && post.live) {
+    const title = normalizeText(post.live.title, 100);
+    const venue = normalizeText(post.live.venue, 100);
+    if (!title || !venue || getContentPolicyViolation(title) || getContentPolicyViolation(venue)) return null;
+
+    return {
+      ...post,
+      type: "live",
+      body,
+      live: {
+        title,
+        date: post.live.date || "",
+        venue,
+      },
+    };
+  }
+
+  return null;
+}
+
+function normalizeArticle(article) {
+  if (!article || typeof article !== "object") return null;
+
+  return {
+    ...article,
+    comments: Array.isArray(article.comments)
+      ? article.comments.map(normalizeArticleComment).filter(Boolean)
+      : [],
+  };
+}
+
+function normalizeArticleComment(comment) {
+  if (!comment || typeof comment !== "object") return null;
+  const body = normalizeText(comment.body, 140);
+  if (!body || getContentPolicyViolation(body)) return null;
+
+  return {
+    id: normalizeText(comment.id, 80) || makeId("comment"),
+    accountId: normalizeText(comment.accountId, 80),
+    body,
+  };
+}
+
+function normalizePlaylist(value, fallback) {
+  if (!value || !Array.isArray(value.tracks)) return fallback;
+
+  return {
+    ...fallback,
+    ...value,
+    tracks: value.tracks.map(normalizePlaylistTrack).filter(Boolean),
+  };
+}
+
+function normalizePlaylistTrack(track) {
+  if (!track || typeof track !== "object") return null;
+  const title = normalizeText(track.title, 80);
+  const artist = normalizeText(track.artist, 80);
+  const note = normalizeText(track.note, 120);
+  if (
+    !title ||
+    !artist ||
+    getContentPolicyViolation(title) ||
+    getContentPolicyViolation(artist) ||
+    getContentPolicyViolation(note)
+  ) {
+    return null;
+  }
+
+  return {
+    id: normalizeText(track.id, 80) || makeId("track"),
+    title,
+    artist,
+    note,
+    addedBy: normalizeText(track.addedBy, 80),
+    votes: Number.isFinite(track.votes) ? track.votes : 0,
+  };
+}
+
 function normalizeWatchParty(value, fallback) {
   if (!value || typeof value !== "object") return fallback;
 
-  const queue = Array.isArray(value.queue) && value.queue.length ? value.queue : fallback.queue;
+  const fallbackQueue = Array.isArray(fallback.queue)
+    ? fallback.queue.map(normalizePartyTrack).filter(Boolean)
+    : [];
+  const queue = Array.isArray(value.queue)
+    ? value.queue.map(normalizePartyTrack).filter(Boolean)
+    : [];
+  const activeQueue = queue.length ? queue : fallbackQueue;
   const fallbackPlayback = {
     ...fallback.playback,
-    trackId: queue[0]?.id || fallback.playback.trackId,
+    trackId: activeQueue[0]?.id || fallback.playback.trackId,
   };
   const playback = value.playback || fallbackPlayback;
-  const trackExists = queue.some((track) => track.id === playback.trackId);
+  const trackExists = activeQueue.some((track) => track.id === playback.trackId);
 
   return {
     roomName: value.roomName || fallback.roomName,
     festivalName: value.festivalName || fallback.festivalName,
-    queue,
+    queue: activeQueue,
     playback: {
       ...fallbackPlayback,
       ...playback,
-      trackId: trackExists ? playback.trackId : queue[0]?.id || fallbackPlayback.trackId,
+      trackId: trackExists ? playback.trackId : activeQueue[0]?.id || fallbackPlayback.trackId,
       status: playback.status === "playing" ? "playing" : "paused",
       pausedAt: Number.isFinite(playback.pausedAt) ? playback.pausedAt : 0,
       updatedByName: playback.updatedByName || "",
     },
-    comments: Array.isArray(value.comments) ? value.comments : fallback.comments,
+    comments: Array.isArray(value.comments)
+      ? value.comments.map(normalizePartyComment).filter(Boolean).slice(-200)
+      : fallback.comments,
   };
+}
+
+function normalizePartyTrack(track) {
+  if (!track || typeof track !== "object") return null;
+
+  const title = normalizeText(track.title, 80);
+  const artist = normalizeText(track.artist, 80);
+  const note = normalizeText(track.note, 140);
+  if (
+    !title ||
+    !artist ||
+    getContentPolicyViolation(title) ||
+    getContentPolicyViolation(artist) ||
+    getContentPolicyViolation(note)
+  ) {
+    return null;
+  }
+
+  const source = track.source === "spotify" || track.spotifyUri || track.spotifyId ? "spotify" : "";
+  const base = {
+    id: normalizeText(track.id, 100) || makeId("party-track"),
+    title,
+    artist,
+    note,
+  };
+
+  if (source !== "spotify") return base;
+
+  const spotifyId = getSpotifyTrackId(track);
+  if (!spotifyId) return null;
+
+  const spotifyAddedAt = normalizeIsoDate(track.spotifyAddedAt || track.addedAt, new Date().toISOString());
+  const normalized = {
+    ...base,
+    id: base.id.startsWith("spotify-") ? base.id : `spotify-${spotifyId}`,
+    source: "spotify",
+    spotifyId,
+    spotifyUri: `spotify:track:${spotifyId}`,
+    spotifyUrl: normalizeSpotifyUrl(track.spotifyUrl, spotifyId),
+    spotifyAddedAt,
+  };
+
+  if (Number.isFinite(track.durationMs)) {
+    normalized.durationMs = track.durationMs;
+  }
+
+  return isFreshSpotifyTrack(normalized) ? normalized : null;
+}
+
+function normalizePartyComment(comment) {
+  if (!comment || typeof comment !== "object") return null;
+  const body = normalizeText(comment.body, 140);
+  if (!body || getContentPolicyViolation(body)) return null;
+
+  return {
+    id: normalizeText(comment.id, 80) || makeId("party-comment"),
+    accountId: normalizeText(comment.accountId, 80),
+    authorName: normalizeText(comment.authorName, 80),
+    authorHandle: normalizeText(comment.authorHandle, 80),
+    body,
+    createdAt: normalizeIsoDate(comment.createdAt, new Date().toISOString()),
+    trackId: normalizeText(comment.trackId, 100),
+    at: Number.isFinite(comment.at) ? comment.at : 0,
+  };
+}
+
+function normalizeText(value, maxLength) {
+  return String(value || "").trim().slice(0, maxLength);
+}
+
+function normalizeIsoDate(value, fallback) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
+}
+
+function normalizeSpotifyUrl(value, spotifyId) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.hostname === "open.spotify.com" && url.pathname.startsWith("/track/")) {
+      return url.toString();
+    }
+  } catch {
+    // Fall through to the canonical URL below.
+  }
+
+  return `https://open.spotify.com/track/${spotifyId}`;
+}
+
+function isFreshSpotifyTrack(track) {
+  const addedAt = Date.parse(track.spotifyAddedAt || "");
+  return Number.isFinite(addedAt) && Date.now() - addedAt <= SPOTIFY_CONTENT_TTL_MS;
 }
 
 function commitState(reason) {

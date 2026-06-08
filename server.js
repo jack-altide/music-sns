@@ -8,10 +8,17 @@ const HOST = process.env.HOST || "0.0.0.0";
 const ROOT = __dirname;
 const STATE_FILE = process.env.PARTY_STATE_FILE || path.join(ROOT, "server-state.json");
 const MAX_BODY_BYTES = 1024 * 1024;
+const SPOTIFY_CONTENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const AUDIO_FILE_URL_PATTERN = /https?:\/\/\S+\.(?:mp3|m4a|aac|wav|flac|ogg)(?:[?#]\S*)?/i;
+const LYRICS_MARKER_PATTERN = /(?:^|\s)(?:歌詞|lyrics?)\s*[:：]/i;
 
-let partyState = loadPartyState();
+let partyState = normalizePersistedPartyState(loadPartyState());
 let partyVersion = partyState ? partyState.version || 1 : 0;
 const clients = new Set();
+
+if (partyState) {
+  persistPartyState();
+}
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -123,7 +130,9 @@ function makePartyPayload(reason) {
 function normalizeIncomingWatchParty(value, clientNowValue) {
   const now = Date.now();
   const clientNow = Number(clientNowValue);
-  const queue = Array.isArray(value.queue) ? value.queue.slice(0, 200) : [];
+  const queue = Array.isArray(value.queue)
+    ? value.queue.slice(0, 200).map(normalizePartyTrack).filter(Boolean)
+    : [];
   const fallbackTrackId = queue[0]?.id || "";
   const incomingPlayback = value.playback || {};
   const incomingStatus = incomingPlayback.status === "playing" ? "playing" : "paused";
@@ -147,8 +156,121 @@ function normalizeIncomingWatchParty(value, clientNowValue) {
       updatedBy: incomingPlayback.updatedBy || "",
       updatedByName: incomingPlayback.updatedByName || "",
     },
-    comments: Array.isArray(value.comments) ? value.comments.slice(-200) : [],
+    comments: Array.isArray(value.comments)
+      ? value.comments.slice(-200).map(normalizePartyComment).filter(Boolean)
+      : [],
   };
+}
+
+function normalizePersistedPartyState(value) {
+  if (!value || typeof value !== "object" || !value.watchParty) return null;
+
+  return {
+    ...value,
+    watchParty: normalizeIncomingWatchParty(value.watchParty, Date.now()),
+  };
+}
+
+function normalizePartyTrack(track) {
+  if (!track || typeof track !== "object") return null;
+
+  const title = normalizeText(track.title, 80);
+  const artist = normalizeText(track.artist, 80);
+  const note = normalizeText(track.note, 140);
+  if (!title || !artist || hasBlockedUserContent(title) || hasBlockedUserContent(artist) || hasBlockedUserContent(note)) {
+    return null;
+  }
+
+  const source = track.source === "spotify" || track.spotifyUri || track.spotifyId ? "spotify" : "";
+  const base = {
+    id: normalizeText(track.id, 100),
+    title,
+    artist,
+    note,
+  };
+
+  if (!base.id) return null;
+  if (source !== "spotify") return base;
+
+  const spotifyId = getSpotifyTrackId(track);
+  if (!spotifyId) return null;
+
+  const spotifyAddedAt = normalizeIsoDate(track.spotifyAddedAt || track.addedAt, new Date().toISOString());
+  const normalized = {
+    ...base,
+    id: base.id.startsWith("spotify-") ? base.id : `spotify-${spotifyId}`,
+    source: "spotify",
+    spotifyId,
+    spotifyUri: `spotify:track:${spotifyId}`,
+    spotifyUrl: normalizeSpotifyUrl(track.spotifyUrl, spotifyId),
+    spotifyAddedAt,
+  };
+
+  if (Number.isFinite(track.durationMs)) {
+    normalized.durationMs = track.durationMs;
+  }
+
+  return isFreshSpotifyTrack(normalized) ? normalized : null;
+}
+
+function normalizePartyComment(comment) {
+  if (!comment || typeof comment !== "object") return null;
+
+  const body = normalizeText(comment.body, 140);
+  if (!body || hasBlockedUserContent(body)) return null;
+
+  return {
+    id: normalizeText(comment.id, 80),
+    accountId: normalizeText(comment.accountId, 80),
+    authorName: normalizeText(comment.authorName, 80),
+    authorHandle: normalizeText(comment.authorHandle, 80),
+    body,
+    createdAt: normalizeIsoDate(comment.createdAt, new Date().toISOString()),
+    trackId: normalizeText(comment.trackId, 100),
+    at: Number.isFinite(comment.at) ? comment.at : 0,
+  };
+}
+
+function normalizeText(value, maxLength) {
+  return String(value || "").trim().slice(0, maxLength);
+}
+
+function normalizeIsoDate(value, fallback) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
+}
+
+function hasBlockedUserContent(value) {
+  const text = String(value || "");
+  return AUDIO_FILE_URL_PATTERN.test(text) || LYRICS_MARKER_PATTERN.test(text);
+}
+
+function getSpotifyTrackId(track) {
+  if (track.spotifyId) return String(track.spotifyId);
+
+  const uriMatch = String(track.spotifyUri || "").match(/^spotify:track:([A-Za-z0-9]+)$/);
+  if (uriMatch) return uriMatch[1];
+
+  const idMatch = String(track.id || "").match(/^spotify-([A-Za-z0-9]+)$/);
+  return idMatch ? idMatch[1] : "";
+}
+
+function normalizeSpotifyUrl(value, spotifyId) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.hostname === "open.spotify.com" && url.pathname.startsWith("/track/")) {
+      return url.toString();
+    }
+  } catch {
+    // Fall through to the canonical URL below.
+  }
+
+  return `https://open.spotify.com/track/${spotifyId}`;
+}
+
+function isFreshSpotifyTrack(track) {
+  const addedAt = Date.parse(track.spotifyAddedAt || "");
+  return Number.isFinite(addedAt) && Date.now() - addedAt <= SPOTIFY_CONTENT_TTL_MS;
 }
 
 function serveStatic(urlPath, response) {

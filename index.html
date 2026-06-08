@@ -92,11 +92,6 @@
                 アーティスト
                 <input id="track-artist" name="trackArtist" type="text" maxlength="60" placeholder="例: Blue Harbor" />
               </label>
-              <label class="music-field wide">
-                音源URL任意
-                <input id="track-audio" name="trackAudio" type="url" placeholder="https://example.com/preview.mp3" />
-              </label>
-
               <label class="live-field is-hidden">
                 イベント名
                 <input id="live-title" name="liveTitle" type="text" maxlength="80" placeholder="例: Friday Session" />
@@ -161,7 +156,7 @@
               </div>
               <div class="party-comments" id="party-comments" aria-live="polite"></div>
               <form class="party-comment-form" id="party-comment-form">
-                <input id="party-comment-input" type="text" maxlength="140" placeholder="曲を聴きながらコメント" required />
+                <input id="party-comment-input" type="text" maxlength="140" placeholder="感想を書く。歌詞や音源URLは不可" required />
                 <button class="primary-button" type="submit">送信</button>
               </form>
             </aside>
@@ -173,6 +168,7 @@
               <h3 id="spotify-title">Spotify連携</h3>
             </div>
             <p class="muted" id="spotify-status">未接続</p>
+            <p class="policy-note">Spotify再生は各参加者本人の操作で開始します。外部音源URLや歌詞本文は投稿できません。</p>
             <div class="spotify-redirect">
               <span>Redirect URI</span>
               <code id="spotify-redirect-uri"></code>

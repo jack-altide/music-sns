@@ -534,6 +534,7 @@ textarea:focus {
 }
 
 .party-art {
+  position: relative;
   display: grid;
   place-items: center;
   min-height: 270px;
@@ -542,6 +543,13 @@ textarea:focus {
     linear-gradient(0deg, rgba(255, 253, 248, 0.16) 1px, transparent 1px),
     linear-gradient(145deg, #171614 0%, #254f35 48%, #c65043 100%);
   background-size: 18px 18px, 18px 18px, auto;
+}
+
+.party-art img {
+  width: min(74%, 230px);
+  aspect-ratio: 1;
+  border-radius: 8px;
+  object-fit: cover;
 }
 
 .vinyl-disc {
@@ -651,7 +659,8 @@ textarea:focus {
 }
 
 .spotify-result-title strong,
-.spotify-result-title span {
+.spotify-result-title span,
+.spotify-content-link {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -660,6 +669,21 @@ textarea:focus {
 .spotify-result-title span {
   color: var(--muted);
   font-size: 0.88rem;
+}
+
+.spotify-content-link,
+.track-added a,
+.spotify-attribution {
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.spotify-content-link:hover,
+.track-added a:hover,
+.spotify-attribution:hover {
+  text-decoration: underline;
 }
 
 .spotify-redirect {
@@ -684,14 +708,33 @@ textarea:focus {
 }
 
 .party-art.has-cover {
-  background-position: center;
-  background-size: cover;
+  background: #171614;
 }
 
-.party-art.has-cover .vinyl-disc {
-  background:
-    radial-gradient(circle, #fffdf8 0 8%, rgba(177, 131, 34, 0.9) 8% 18%, transparent 18% 100%),
-    repeating-radial-gradient(circle, rgba(23, 22, 20, 0.92) 0 7px, rgba(36, 33, 29, 0.92) 7px 10px);
+.spotify-cover-placeholder {
+  display: grid;
+  place-items: center;
+  width: min(74%, 230px);
+  aspect-ratio: 1;
+  border: 1px solid rgba(255, 253, 248, 0.28);
+  border-radius: 8px;
+  color: #fffdf8;
+  font-weight: 900;
+}
+
+.spotify-attribution {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  color: #fffdf8;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.34);
+}
+
+.policy-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
 }
 
 .party-chat-panel {
