@@ -878,12 +878,20 @@ function renderSpotifyPanel() {
   const token = getStoredSpotifyToken();
   const clientId = getSpotifyClientId();
   const redirectUri = getSpotifyRedirectUri();
+  const redirectUriAllowed = isSpotifyRedirectUriAllowed(redirectUri);
+  const spotifyBlocked = Boolean(clientId) && !redirectUriAllowed;
 
   spotifyRedirectUri.textContent = redirectUri;
   spotifyConfigClientId.textContent = clientId ? maskClientId(clientId) : "未設定: config.jsのspotifyClientIdを設定";
+  spotifyReadyButton.disabled = spotifyBlocked;
+  spotifySearchForm.querySelector("button").disabled = spotifyBlocked;
+  spotifyLilacButton.disabled = spotifyBlocked;
 
   if (!clientId) {
     spotifyStatus.textContent = "Spotify Client IDが未設定です。config.jsを設定してください。";
+  } else if (spotifyBlocked) {
+    spotifyStatus.textContent =
+      "公開環境のSpotifyログインにはHTTPSのRedirect URIが必要です。ドメインとHTTPSを設定してください。";
   } else if (spotifyReady && spotifyDeviceId) {
     spotifyStatus.textContent = `接続済み / Web Playback SDK device: ${spotifyDeviceId.slice(0, 8)}...`;
   } else if (token?.accessToken && !isSpotifyTokenExpired(token)) {
@@ -1456,6 +1464,11 @@ async function initSpotifyIntegration() {
 }
 
 async function beginSpotifyAuthorization(clientId) {
+  const redirectUri = getSpotifyRedirectUri();
+  if (!isSpotifyRedirectUriAllowed(redirectUri)) {
+    throw new Error("Spotifyの公開Redirect URIにはHTTPSが必要です。ドメインとHTTPSを設定してください。");
+  }
+
   const codeVerifier = generateRandomString(64);
   const codeChallenge = await createCodeChallenge(codeVerifier);
   const authState = generateRandomString(32);
@@ -1468,7 +1481,7 @@ async function beginSpotifyAuthorization(clientId) {
     response_type: "code",
     client_id: clientId,
     scope: SPOTIFY_SCOPES.join(" "),
-    redirect_uri: getSpotifyRedirectUri(),
+    redirect_uri: redirectUri,
     state: authState,
     code_challenge_method: "S256",
     code_challenge: codeChallenge,
@@ -1935,7 +1948,25 @@ function generateRandomString(length) {
 }
 
 function getSpotifyRedirectUri() {
-  return `${window.location.origin}${window.location.pathname}`;
+  const configuredRedirectUri = String(APP_CONFIG.spotifyRedirectUri || "").trim();
+  if (configuredRedirectUri) return configuredRedirectUri;
+
+  const pathname = window.location.pathname.endsWith("/index.html")
+    ? window.location.pathname.slice(0, -"index.html".length)
+    : window.location.pathname;
+  return `${window.location.origin}${pathname || "/"}`;
+}
+
+function isSpotifyRedirectUriAllowed(redirectUri) {
+  try {
+    const url = new URL(redirectUri);
+    if (url.protocol === "https:") return true;
+    if (url.protocol !== "http:") return false;
+
+    return url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname === "::1";
+  } catch {
+    return false;
+  }
 }
 
 function clearSpotifyCallbackParams() {

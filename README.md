@@ -17,17 +17,25 @@
 http://127.0.0.1:5173/
 ```
 
-公開サーバーで確認するURL:
+公開サーバーで画面だけ確認するURL:
 
 ```text
 http://160.16.213.245:5173/
+```
+
+Spotifyログインを公開サーバーで使うにはHTTPSのURLが必要です。`http://160.16.213.245/` や `http://160.16.213.245:5173/` はSpotifyのRedirect URIとして登録できません。
+
+このサーバーでは、応急対応として以下のHTTPS URLを使います。
+
+```text
+https://160.16.213.245.sslip.io/
 ```
 
 SpotifyのRedirect URIは、URLの末尾 `/` まで完全一致が必要です。
 
 ```text
 http://127.0.0.1:5173/
-http://160.16.213.245:5173/
+https://160.16.213.245.sslip.io/
 ```
 
 ## 実装している機能
@@ -223,8 +231,10 @@ http://127.0.0.1:5173/
 公開サーバー用Redirect URI:
 
 ```text
-http://160.16.213.245:5173/
+https://160.16.213.245.sslip.io/
 ```
+
+Spotifyは公開URLのRedirect URIにHTTPSを要求します。HTTPで許可されるのは `http://127.0.0.1:5173/` のようなローカル確認用URLだけです。
 
 ユーザーは画面でClient IDを入力しません。各ユーザーが「検索」や「プレイヤー準備」を使うと、Spotify OAuthで自分のSpotifyアカウントにログインします。
 
@@ -249,7 +259,8 @@ http://160.16.213.245:5173/
 
 ```text
 IPアドレス: 160.16.213.245
-公開URL: http://160.16.213.245:5173/
+画面確認URL: http://160.16.213.245:5173/
+Spotifyログイン用URL: https://160.16.213.245.sslip.io/
 ```
 
 ### 授業PDFのさくらVPSを使う場合
@@ -259,8 +270,8 @@ PDFの手順で作成したさくらVPSは、Ubuntu 24.04とApacheの実習環�
 - 最初のログインユーザーが `ubuntu` の場合は `ssh ubuntu@160.16.213.245` で入ります。
 - 別ユーザーで配置する場合は、以下の `<user>` をそのユーザー名に置き換えてください。
 - PDFでApacheを入れていても、Node.jsを `5173` 番で動かすだけなら共存できます。Apacheは通常 `80` 番を使うため、このREADMEの `5173` 番起動とは競合しません。
-- `http://160.16.213.245:5173/` で直接公開する場合は、Ubuntu側のファイアウォールに加えて、さくらVPSのパケットフィルターでもTCP `5173` をカスタム許可してください。
-- Apache経由で `http://160.16.213.245/` に出したい場合は、Apacheのリバースプロキシ設定が別途必要です。その場合はSpotify Developer DashboardのRedirect URIも `http://160.16.213.245/` に変わります。
+- `http://160.16.213.245:5173/` で直接開くと画面確認はできますが、Spotifyログインはできません。Spotifyの公開Redirect URIにはHTTPSが必要です。
+- Spotifyログインまで公開サーバーで使う場合は、ApacheやNginxでHTTPSのリバースプロキシを設定してください。応急対応では `160.16.213.245.sslip.io` を使います。Spotify Developer DashboardのRedirect URIは `https://160.16.213.245.sslip.io/` です。
 - systemdの `WorkingDirectory=/home/<user>/music-sns` と `User=<user>` は、実際にリポジトリを置いたユーザーに合わせてください。
 
 ### 初回デプロイ
@@ -332,10 +343,10 @@ window.MUSIC_SNS_CONFIG = {
 
 保存は `Ctrl + O`、Enter、終了は `Ctrl + X` です。
 
-Spotify Developer Dashboardには、公開サーバー用Redirect URIを登録します。
+Spotify Developer Dashboardには、公開サーバー用Redirect URIを登録します。公開サーバーではHTTPSのURLが必要です。
 
 ```text
-http://160.16.213.245:5173/
+https://160.16.213.245.sslip.io/
 ```
 
 #### 5. 一度手動で起動して確認する
@@ -353,6 +364,8 @@ http://160.16.213.245:5173/
 表示できたら、サーバー画面で `Ctrl + C` を押して一度止めます。次の手順で、ログアウトしても動き続けるようにします。
 
 #### 6. 5173番ポートを開ける
+
+この手順は、`http://160.16.213.245:5173/` で直接画面確認したい場合だけ必要です。HTTPSリバースプロキシ構成にする場合、5173番は外部公開せず、Apache/Nginxから `127.0.0.1:5173` へ接続させます。
 
 Ubuntu側のファイアウォールを使っている場合:
 
@@ -427,6 +440,91 @@ journalctl -u music-sns -f
 
 ログ表示を止めるときは `Ctrl + C` です。
 
+#### 8. Spotifyログイン用にHTTPS化する
+
+Spotifyログインを公開サーバーで使うには、公開URLをHTTPSにする必要があります。`http://160.16.213.245/` や `http://160.16.213.245:5173/` はSpotifyのRedirect URIとして登録できません。
+
+おすすめ構成:
+
+```text
+利用者のブラウザ
+  ↓ https://160.16.213.245.sslip.io/
+Apache または Nginx
+  ↓ http://127.0.0.1:5173/
+Node.js app
+```
+
+この構成では、5173番ポートを外部公開する必要はありません。Node.jsはサーバー内部だけで待ち受けます。
+
+応急対応では `160.16.213.245.sslip.io` を使います。このドメインはIPアドレス `160.16.213.245` に解決されます。独自ドメインを取った場合は、以下の `160.16.213.245.sslip.io` を自分のドメインに置き換えてください。
+
+Apacheを使う例です。
+
+```bash
+sudo apt update
+sudo apt install -y apache2 certbot python3-certbot-apache
+sudo a2enmod proxy proxy_http headers ssl rewrite
+```
+
+Apacheの設定ファイルを作ります。
+
+```bash
+sudo nano /etc/apache2/sites-available/music-sns.conf
+```
+
+中身:
+
+```apache
+<VirtualHost *:80>
+    ServerName 160.16.213.245.sslip.io
+
+    ProxyPreserveHost On
+    ProxyPass / http://127.0.0.1:5173/
+    ProxyPassReverse / http://127.0.0.1:5173/
+</VirtualHost>
+```
+
+有効化します。
+
+```bash
+sudo a2ensite music-sns
+sudo apache2ctl configtest
+sudo systemctl reload apache2
+```
+
+HTTPS証明書を発行します。
+
+```bash
+sudo certbot --apache -d 160.16.213.245.sslip.io
+```
+
+systemdのNode起動設定は、外部公開ではなく内部待ち受けに変えるのがおすすめです。
+
+```ini
+Environment=HOST=127.0.0.1
+Environment=PORT=5173
+```
+
+変更したら再起動します。
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart music-sns
+sudo systemctl reload apache2
+```
+
+Spotify Developer DashboardのRedirect URIには、HTTPS化したURLを登録します。
+
+```text
+https://160.16.213.245.sslip.io/
+```
+
+その後、ブラウザで以下を開いてSpotifyログインを確認します。
+
+```text
+https://160.16.213.245.sslip.io/
+```
+
 ### 2回目以降のデプロイ
 
 誰かがGitHubにpushした最新版を、公開サーバーに反映する手順です。
@@ -465,8 +563,10 @@ sudo systemctl status music-sns
 ブラウザで確認します。
 
 ```text
-http://160.16.213.245:5173/
+https://160.16.213.245.sslip.io/
 ```
+
+HTTPS化していない場合は `http://160.16.213.245:5173/` で画面確認だけできます。ただし、そのURLではSpotifyログインはできません。
 
 ### 公開サーバーで困ったとき
 
@@ -502,11 +602,12 @@ GitHubからpullできない:
 
 ブラウザで開けない:
 
-- URLが `http://160.16.213.245:5173/` になっているか確認する
+- HTTPS化済みならURLが `https://160.16.213.245.sslip.io/` になっているか確認する
+- HTTPS化していない画面確認だけならURLが `http://160.16.213.245:5173/` になっているか確認する
 - `sudo systemctl status music-sns` で起動中か確認する
 - `sudo ufw status` で5173番が許可されているか確認する
 - さくらVPSのパケットフィルターでTCP 5173が許可されているか確認する
-- SpotifyのエラーならRedirect URIが `http://160.16.213.245:5173/` と完全一致しているか確認する
+- SpotifyのエラーならRedirect URIがHTTPSの公開URL、`https://160.16.213.245.sslip.io/` と完全一致しているか確認する
 
 ## 同期仕様
 
