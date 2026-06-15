@@ -235,6 +235,10 @@ function normalizePartyTrack(track) {
     normalized.durationMs = track.durationMs;
   }
 
+  if (Number.isFinite(track.trackDurationMs)) {
+    normalized.trackDurationMs = track.trackDurationMs;
+  }
+
   return isFreshCatalogTrack(normalized) ? normalized : null;
 }
 
@@ -287,6 +291,7 @@ function normalizeITunesPartyTrack(track, base) {
     source: "itunes",
     itunesId,
     itunesUrl,
+    previewUrl: normalizeITunesPreviewUrl(track.previewUrl),
     artworkUrl: normalizeImageUrl(track.artworkUrl),
     itunesAddedAt: normalizeIsoDate(track.itunesAddedAt || track.addedAt, new Date().toISOString()),
   };
@@ -331,6 +336,19 @@ function normalizeITunesUrl(value) {
     if (url.protocol === "https:" && /(^|\.)apple\.com$/.test(url.hostname)) {
       return url.toString();
     }
+  } catch {
+    // Fall through to an empty URL.
+  }
+
+  return "";
+}
+
+function normalizeITunesPreviewUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    const isApplePreviewHost =
+      /(^|\.)itunes\.apple\.com$/.test(url.hostname) || /(^|\.)mzstatic\.com$/.test(url.hostname);
+    if (url.protocol === "https:" && isApplePreviewHost) return url.toString();
   } catch {
     // Fall through to an empty URL.
   }

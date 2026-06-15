@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Music SNS</title>
-    <link rel="stylesheet" href="styles.css?v=6" />
+    <link rel="stylesheet" href="styles.css?v=7" />
   </head>
   <body>
     <div class="app-shell">
@@ -145,7 +145,7 @@
                   <button class="primary-button" id="party-join" type="button">参加して同期</button>
                   <button class="ghost-button" id="party-play" type="button">再生</button>
                   <button class="ghost-button" id="party-next" type="button">次の曲</button>
-                  <button class="ghost-button" id="party-audio-test" type="button">音声テスト</button>
+                  <button class="ghost-button" id="party-audio-test" type="button">プレビュー確認</button>
                 </div>
               </div>
             </section>
@@ -169,7 +169,7 @@
               <h3 id="spotify-title">曲検索</h3>
             </div>
             <p class="muted" id="spotify-status">検索待機中</p>
-            <p class="policy-note">iTunes Search APIで曲を検索します。アプリ内ではデモ音源を再生し、外部音源URLや歌詞本文は投稿できません。</p>
+            <p class="policy-note">iTunes Search APIで曲を検索し、Appleが提供する短いプレビューを再生します。外部音源URLや歌詞本文は投稿できません。</p>
             <form class="spotify-search-form" id="spotify-search-form">
               <label>
                 iTunesで曲を検索
@@ -290,7 +290,7 @@
       </article>
     </template>
 
-    <script src="config.js?v=6"></script>
-    <script src="app.js?v=6"></script>
+    <script src="config.js?v=7"></script>
+    <script src="app.js?v=7"></script>
   </body>
 </html>

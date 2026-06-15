@@ -1,6 +1,7 @@
 const STORAGE_KEY = "music-sns-state-v1";
 const PARTY_CHANNEL_NAME = "music-sns-watch-party";
 const PARTY_DURATION = 36;
+const ITUNES_PREVIEW_DURATION = 30;
 const CATALOG_CONTENT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const AUDIO_FILE_URL_PATTERN = /https?:\/\/\S+\.(?:mp3|m4a|aac|wav|flac|ogg)(?:[?#]\S*)?/i;
 const LYRICS_MARKER_PATTERN = /(?:^|\s)(?:歌詞|lyrics?)\s*[:：]/i;
@@ -336,19 +337,14 @@ playlistForm.addEventListener("submit", (event) => {
   renderPlaylist();
 });
 
-partyJoinButton.addEventListener("click", async () => {
+partyJoinButton.addEventListener("click", () => {
   partyJoined = true;
-  await ensureAudioContextReady();
   renderParty();
   syncPartyAudio();
 });
 
-partyPlayButton.addEventListener("click", async () => {
+partyPlayButton.addEventListener("click", () => {
   partyJoined = true;
-  if (!(await ensureAudioContextReady())) {
-    renderParty();
-    return;
-  }
 
   const playback = state.watchParty.playback;
   if (playback.status === "playing") {
@@ -358,18 +354,14 @@ partyPlayButton.addEventListener("click", async () => {
   }
 });
 
-partyNextButton.addEventListener("click", async () => {
+partyNextButton.addEventListener("click", () => {
   partyJoined = true;
-  if (!(await ensureAudioContextReady())) {
-    renderParty();
-    return;
-  }
   advancePartyTrack(false);
 });
 
 partyAudioTestButton.addEventListener("click", async () => {
   partyJoined = true;
-  await playAudioTestTone();
+  await playAudioTestPreview();
   renderParty();
 });
 
@@ -792,7 +784,7 @@ function renderParty() {
 
   partyRoomName.textContent = party.roomName;
   partyTrackTitle.textContent = `${track.title} / ${track.artist}`;
-  const sourceLabel = isExternalCatalogTrack(track) ? " / アプリ内デモ再生" : "";
+  const sourceLabel = getTrackAudioLabel(track);
   partyTrackMeta.textContent = `${party.festivalName} / ${track.note || "フェスで流れそうな候補曲"}${sourceLabel} / 操作: ${updatedByName}`;
   partyStatus.textContent = partyJoined ? audioStatusMessage || "同期中" : "未参加";
   partyStatus.classList.toggle("is-live", partyJoined);
@@ -917,12 +909,8 @@ function renderPartyQueue() {
       link.textContent = getTrackSourceName(track);
       status.append(" / ", link);
     }
-    row.querySelector("button").addEventListener("click", async () => {
+    row.querySelector("button").addEventListener("click", () => {
       partyJoined = true;
-      if (!(await ensureAudioContextReady())) {
-        renderParty();
-        return;
-      }
       selectPartyTrack(track.id, true);
     });
 
@@ -1022,7 +1010,7 @@ function ensureUserContentAllowed(...values) {
 function getContentPolicyViolation(value) {
   const text = String(value || "");
   if (AUDIO_FILE_URL_PATTERN.test(text)) {
-    return "音源ファイルURLは投稿できません。曲検索の外部リンクまたはデモ音源を使ってください。";
+    return "音源ファイルURLは投稿できません。曲検索のiTunesリンクまたはプレビューを使ってください。";
   }
 
   if (LYRICS_MARKER_PATTERN.test(text)) {
@@ -1046,10 +1034,24 @@ function getExternalTrackUrl(track) {
   return "";
 }
 
+function getTrackPreviewUrl(track) {
+  if (track?.source !== "itunes") return "";
+  return normalizeITunesPreviewUrl(track.previewUrl);
+}
+
 function getTrackSourceName(track) {
   if (track?.source === "itunes") return "iTunes";
   if (track?.source === "spotify") return "Spotify";
   return "外部リンク";
+}
+
+function getTrackAudioLabel(track) {
+  if (track?.source === "itunes") {
+    return getTrackPreviewUrl(track) ? " / iTunesプレビュー再生" : " / iTunesリンクのみ";
+  }
+
+  if (isExternalCatalogTrack(track)) return " / 外部カタログ";
+  return " / デモ再生";
 }
 
 function playPartyPlayback() {
@@ -1131,6 +1133,8 @@ function getPartyTrack(trackId) {
 }
 
 function getPartyDuration(track = getPartyTrack(state.watchParty.playback.trackId)) {
+  if (getTrackPreviewUrl(track)) return ITUNES_PREVIEW_DURATION;
+
   if (track?.durationMs) {
     return Math.max(1, Math.round(track.durationMs / 1000));
   }
@@ -1174,6 +1178,7 @@ function startPartyClock() {
 function syncPartyAudio() {
   const playback = state.watchParty.playback;
   const track = getPartyTrack(playback.trackId);
+  const previewUrl = getTrackPreviewUrl(track);
 
   if (!partyJoined || !track) {
     stopPartyAudio();
@@ -1185,13 +1190,76 @@ function syncPartyAudio() {
     return;
   }
 
-  const signature = `${track.id}-${playback.startedAt}`;
+  const signature = `${track.id}-${playback.startedAt}-${previewUrl || "generated"}`;
   if (signature === partyAudioSignature) return;
 
   stopPartyAudio();
   partyAudioSignature = signature;
 
+  if (previewUrl) {
+    startPartyPreviewAudio(track, previewUrl);
+    return;
+  }
+
   startGeneratedPartyLoop(track);
+}
+
+function startPartyPreviewAudio(track, previewUrl) {
+  stopGeneratedPreview();
+
+  const audio = new Audio(previewUrl);
+  const position = Math.max(0, Math.min(getPartyPosition(), getPartyDuration(track) - 0.25));
+
+  partyAudioElement = audio;
+  audio.preload = "auto";
+  audio.volume = 0.9;
+
+  if (position > 0) {
+    audio.addEventListener(
+      "loadedmetadata",
+      () => {
+        try {
+          audio.currentTime = Math.min(position, Math.max(0, audio.duration - 0.25));
+        } catch {
+          // Some browsers only allow seeking after more media data is loaded.
+        }
+      },
+      { once: true },
+    );
+  }
+
+  audio.addEventListener(
+    "ended",
+    () => {
+      if (partyAudioElement === audio) advancePartyTrack(true);
+    },
+    { once: true },
+  );
+
+  audio.addEventListener(
+    "error",
+    () => {
+      if (partyAudioElement !== audio) return;
+      audioStatusMessage = "プレビュー再生エラー";
+      partyAudioSignature = "";
+      renderParty();
+    },
+    { once: true },
+  );
+
+  void audio
+    .play()
+    .then(() => {
+      if (partyAudioElement !== audio) return;
+      audioStatusMessage = "";
+      renderParty();
+    })
+    .catch(() => {
+      if (partyAudioElement !== audio) return;
+      audioStatusMessage = "音声ブロック中";
+      partyAudioSignature = "";
+      renderParty();
+    });
 }
 
 function startGeneratedPartyLoop(track) {
@@ -1249,6 +1317,8 @@ function stopPartyAudio() {
 
   if (partyAudioElement) {
     partyAudioElement.pause();
+    partyAudioElement.removeAttribute("src");
+    partyAudioElement.load();
     partyAudioElement = null;
   }
 
@@ -1323,46 +1393,46 @@ function stopGeneratedPreview() {
   activeOscillators = [];
 }
 
-async function playAudioTestTone() {
+async function playAudioTestPreview() {
   stopGeneratedPreview();
   stopPartyAudio();
 
-  if (!(await ensureAudioContextReady())) {
-    audioStatusMessage = "音声ブロック中";
+  const track = getPartyTrack(state.watchParty.playback.trackId);
+  const previewUrl = getTrackPreviewUrl(track);
+
+  if (!previewUrl) {
+    audioStatusMessage = "iTunesプレビューなし";
     return false;
   }
 
-  const now = audioContext.currentTime;
-  const master = audioContext.createGain();
-  master.gain.setValueAtTime(0.0001, now);
-  master.gain.exponentialRampToValueAtTime(0.55, now + 0.03);
-  master.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
-  master.connect(audioContext.destination);
-  activeOscillators.push(master);
+  const audio = new Audio(previewUrl);
+  partyAudioElement = audio;
+  partyAudioSignature = `test-${track.id}-${Date.now()}`;
+  audio.preload = "auto";
+  audio.volume = 0.9;
+  audioStatusMessage = "プレビュー確認中";
 
-  [440, 880].forEach((frequency, index) => {
-    const oscillator = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-    const start = now + index * 0.45;
-    oscillator.type = "square";
-    oscillator.frequency.setValueAtTime(frequency, start);
-    gain.gain.setValueAtTime(0.0001, start);
-    gain.gain.exponentialRampToValueAtTime(0.5, start + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.35);
-    oscillator.connect(gain).connect(master);
-    oscillator.start(start);
-    oscillator.stop(start + 0.38);
-    activeOscillators.push(oscillator);
-  });
-
-  audioStatusMessage = "音声テスト中";
-  window.setTimeout(() => {
-    if (audioStatusMessage === "音声テスト中") {
+  audio.addEventListener(
+    "ended",
+    () => {
+      if (partyAudioElement !== audio) return;
       audioStatusMessage = "";
+      partyAudioSignature = "";
       renderParty();
+    },
+    { once: true },
+  );
+
+  try {
+    await audio.play();
+    return true;
+  } catch {
+    if (partyAudioElement === audio) {
+      audioStatusMessage = "音声ブロック中";
+      partyAudioSignature = "";
     }
-  }, 1400);
-  return true;
+    return false;
+  }
 }
 
 function ensureAudioContext() {
@@ -1418,7 +1488,6 @@ async function searchMusicAndRenderResults(query) {
 
 async function addSelectedITunesTrack(itunesTrack, query) {
   partyJoined = true;
-  const audioReady = await ensureAudioContextReady();
 
   const partyTrack = makePartyTrackFromITunes(itunesTrack, query);
   const existingTrack = state.watchParty.queue.find(
@@ -1426,23 +1495,33 @@ async function addSelectedITunesTrack(itunesTrack, query) {
   );
   const trackToSelect = existingTrack || partyTrack;
 
+  if (existingTrack && partyTrack.previewUrl && !existingTrack.previewUrl) {
+    existingTrack.previewUrl = partyTrack.previewUrl;
+    existingTrack.artworkUrl = partyTrack.artworkUrl || existingTrack.artworkUrl;
+    existingTrack.durationMs = partyTrack.durationMs;
+    existingTrack.itunesAddedAt = partyTrack.itunesAddedAt;
+  }
+
+  const canPlayPreview = Boolean(getTrackPreviewUrl(trackToSelect));
+
   if (!existingTrack) {
     state.watchParty.queue.unshift(partyTrack);
   }
 
   state.watchParty.playback = {
     trackId: trackToSelect.id,
-    status: audioReady ? "playing" : "paused",
-    startedAt: audioReady ? getSyncedNow() : null,
+    status: canPlayPreview ? "playing" : "paused",
+    startedAt: canPlayPreview ? getSyncedNow() : null,
     pausedAt: 0,
     updatedAt: new Date().toISOString(),
     updatedBy: getCurrentAccount()?.id || state.watchParty.playback.updatedBy,
     updatedByName: getCurrentAccount()?.name || state.watchParty.playback.updatedByName,
   };
 
+  audioStatusMessage = canPlayPreview ? "" : "iTunesプレビューなし";
   musicSearchStatusMessage = existingTrack
     ? `追加済みの曲をキューで選択しました: ${trackToSelect.title}`
-    : `iTunes曲をキューに追加しました: ${trackToSelect.title}`;
+    : `iTunesプレビューをキューに追加しました: ${trackToSelect.title}`;
   commitState("music-search");
   musicSearchInput.value = query;
   render();
@@ -1489,6 +1568,7 @@ function renderMusicSearchResults(tracks, query) {
     const meta = document.createElement("span");
     const externalLink = document.createElement("a");
     const button = document.createElement("button");
+    const hasPreview = Boolean(normalizeITunesPreviewUrl(track.previewUrl));
 
     row.className = "spotify-result";
     title.className = "spotify-result-title";
@@ -1503,7 +1583,8 @@ function renderMusicSearchResults(tracks, query) {
     externalLink.textContent = "iTunesで開く";
     button.className = "icon-button";
     button.type = "button";
-    button.textContent = "追加して再生";
+    button.textContent = hasPreview ? "追加して再生" : "追加";
+    if (!hasPreview) button.title = "この検索結果にはiTunesプレビューURLがありません。";
     button.addEventListener("click", async () => {
       try {
         await addSelectedITunesTrack(track, query);
@@ -1522,6 +1603,7 @@ function renderMusicSearchResults(tracks, query) {
 function makePartyTrackFromITunes(track, query) {
   const itunesId = String(track.trackId || "");
   const artworkUrl = getHighResolutionArtworkUrl(track.artworkUrl100 || track.artworkUrl60 || "");
+  const previewUrl = normalizeITunesPreviewUrl(track.previewUrl);
   return {
     id: `itunes-${itunesId || makeId("track")}`,
     title: track.trackName || "曲名不明",
@@ -1530,8 +1612,10 @@ function makePartyTrackFromITunes(track, query) {
     source: "itunes",
     itunesId,
     itunesUrl: track.trackViewUrl || "",
+    previewUrl,
     artworkUrl,
-    durationMs: Number.isFinite(track.trackTimeMillis) ? track.trackTimeMillis : undefined,
+    durationMs: previewUrl ? ITUNES_PREVIEW_DURATION * 1000 : undefined,
+    trackDurationMs: Number.isFinite(track.trackTimeMillis) ? track.trackTimeMillis : undefined,
     itunesAddedAt: new Date().toISOString(),
   };
 }
@@ -1764,6 +1848,10 @@ function normalizePartyTrack(track) {
     normalized.durationMs = track.durationMs;
   }
 
+  if (Number.isFinite(track.trackDurationMs)) {
+    normalized.trackDurationMs = track.trackDurationMs;
+  }
+
   return isFreshCatalogTrack(normalized) ? normalized : null;
 }
 
@@ -1784,6 +1872,7 @@ function normalizeITunesPartyTrack(track, base) {
     source: "itunes",
     itunesId,
     itunesUrl,
+    previewUrl: normalizeITunesPreviewUrl(track.previewUrl),
     artworkUrl: normalizeImageUrl(track.artworkUrl),
     itunesAddedAt: normalizeIsoDate(track.itunesAddedAt || track.addedAt, new Date().toISOString()),
   };
@@ -1854,6 +1943,19 @@ function normalizeITunesUrl(value) {
     if (url.protocol === "https:" && /(^|\.)apple\.com$/.test(url.hostname)) {
       return url.toString();
     }
+  } catch {
+    // Fall through to an empty URL.
+  }
+
+  return "";
+}
+
+function normalizeITunesPreviewUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    const isApplePreviewHost =
+      /(^|\.)itunes\.apple\.com$/.test(url.hostname) || /(^|\.)mzstatic\.com$/.test(url.hostname);
+    if (url.protocol === "https:" && isApplePreviewHost) return url.toString();
   } catch {
     // Fall through to an empty URL.
   }
