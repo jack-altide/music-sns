@@ -194,6 +194,7 @@ const partyStatus = document.querySelector("#party-status");
 const partyJoinButton = document.querySelector("#party-join");
 const partyPlayButton = document.querySelector("#party-play");
 const partyNextButton = document.querySelector("#party-next");
+const partyAudioTestButton = document.querySelector("#party-audio-test");
 const partyRoomName = document.querySelector("#party-room-name");
 const partyTrackTitle = document.querySelector("#party-track-title");
 const partyTrackMeta = document.querySelector("#party-track-meta");
@@ -364,6 +365,12 @@ partyNextButton.addEventListener("click", async () => {
     return;
   }
   advancePartyTrack(false);
+});
+
+partyAudioTestButton.addEventListener("click", async () => {
+  partyJoined = true;
+  await playAudioTestTone();
+  renderParty();
 });
 
 partyCommentForm.addEventListener("submit", (event) => {
@@ -1314,6 +1321,48 @@ function stopGeneratedPreview() {
     }
   });
   activeOscillators = [];
+}
+
+async function playAudioTestTone() {
+  stopGeneratedPreview();
+  stopPartyAudio();
+
+  if (!(await ensureAudioContextReady())) {
+    audioStatusMessage = "音声ブロック中";
+    return false;
+  }
+
+  const now = audioContext.currentTime;
+  const master = audioContext.createGain();
+  master.gain.setValueAtTime(0.0001, now);
+  master.gain.exponentialRampToValueAtTime(0.55, now + 0.03);
+  master.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
+  master.connect(audioContext.destination);
+  activeOscillators.push(master);
+
+  [440, 880].forEach((frequency, index) => {
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    const start = now + index * 0.45;
+    oscillator.type = "square";
+    oscillator.frequency.setValueAtTime(frequency, start);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.5, start + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.35);
+    oscillator.connect(gain).connect(master);
+    oscillator.start(start);
+    oscillator.stop(start + 0.38);
+    activeOscillators.push(oscillator);
+  });
+
+  audioStatusMessage = "音声テスト中";
+  window.setTimeout(() => {
+    if (audioStatusMessage === "音声テスト中") {
+      audioStatusMessage = "";
+      renderParty();
+    }
+  }, 1400);
+  return true;
 }
 
 function ensureAudioContext() {
