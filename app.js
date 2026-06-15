@@ -167,6 +167,7 @@ let partyAudioSignature = "";
 let partyLoopTimer = null;
 let partyOscillators = [];
 let lastAutoAdvanceKey = "";
+let audioStatusMessage = "";
 let partyServerSyncEnabled = false;
 let partyServerVersion = 0;
 let partyServerClockOffsetMs = 0;
@@ -334,16 +335,19 @@ playlistForm.addEventListener("submit", (event) => {
   renderPlaylist();
 });
 
-partyJoinButton.addEventListener("click", () => {
+partyJoinButton.addEventListener("click", async () => {
   partyJoined = true;
-  ensureAudioContext();
+  await ensureAudioContextReady();
   renderParty();
   syncPartyAudio();
 });
 
-partyPlayButton.addEventListener("click", () => {
+partyPlayButton.addEventListener("click", async () => {
   partyJoined = true;
-  ensureAudioContext();
+  if (!(await ensureAudioContextReady())) {
+    renderParty();
+    return;
+  }
 
   const playback = state.watchParty.playback;
   if (playback.status === "playing") {
@@ -353,9 +357,12 @@ partyPlayButton.addEventListener("click", () => {
   }
 });
 
-partyNextButton.addEventListener("click", () => {
+partyNextButton.addEventListener("click", async () => {
   partyJoined = true;
-  ensureAudioContext();
+  if (!(await ensureAudioContextReady())) {
+    renderParty();
+    return;
+  }
   advancePartyTrack(false);
 });
 
@@ -780,7 +787,7 @@ function renderParty() {
   partyTrackTitle.textContent = `${track.title} / ${track.artist}`;
   const sourceLabel = isExternalCatalogTrack(track) ? " / アプリ内デモ再生" : "";
   partyTrackMeta.textContent = `${party.festivalName} / ${track.note || "フェスで流れそうな候補曲"}${sourceLabel} / 操作: ${updatedByName}`;
-  partyStatus.textContent = partyJoined ? "同期中" : "未参加";
+  partyStatus.textContent = partyJoined ? audioStatusMessage || "同期中" : "未参加";
   partyStatus.classList.toggle("is-live", partyJoined);
   partyJoinButton.textContent = partyJoined ? "同期中" : "参加して同期";
   partyPlayButton.textContent = playback.status === "playing" ? "一時停止" : "再生";
@@ -903,9 +910,12 @@ function renderPartyQueue() {
       link.textContent = getTrackSourceName(track);
       status.append(" / ", link);
     }
-    row.querySelector("button").addEventListener("click", () => {
+    row.querySelector("button").addEventListener("click", async () => {
       partyJoined = true;
-      ensureAudioContext();
+      if (!(await ensureAudioContextReady())) {
+        renderParty();
+        return;
+      }
       selectPartyTrack(track.id, true);
     });
 
@@ -920,7 +930,8 @@ function createPlayControl(post) {
   button.setAttribute("aria-label", "デモ音源を再生");
   button.textContent = "▶ デモ";
 
-  button.addEventListener("click", () => {
+  button.addEventListener("click", async () => {
+    if (!(await ensureAudioContextReady())) return;
     playGeneratedPreview(post.track.title + post.track.artist);
   });
 
@@ -1201,7 +1212,7 @@ function schedulePartyNotes(track) {
   const startIndex = Math.floor(position / 0.3) % scale.length;
   const master = audioContext.createGain();
   master.gain.setValueAtTime(0.0001, now);
-  master.gain.exponentialRampToValueAtTime(0.12, now + 0.04);
+  master.gain.exponentialRampToValueAtTime(0.32, now + 0.04);
   master.gain.exponentialRampToValueAtTime(0.0001, now + 1.7);
   master.connect(audioContext.destination);
   partyOscillators.push(master);
@@ -1214,7 +1225,7 @@ function schedulePartyNotes(track) {
     oscillator.type = index % 3 === 0 ? "triangle" : "sine";
     oscillator.frequency.setValueAtTime(frequency, start);
     gain.gain.setValueAtTime(0.0001, start);
-    gain.gain.exponentialRampToValueAtTime(0.2, start + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.42, start + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.26);
     oscillator.connect(gain).connect(master);
     oscillator.start(start);
@@ -1267,7 +1278,7 @@ function playGeneratedPreview(seed) {
   const notes = makeScale(seed);
   const master = audioContext.createGain();
   master.gain.setValueAtTime(0.0001, now);
-  master.gain.exponentialRampToValueAtTime(0.16, now + 0.04);
+  master.gain.exponentialRampToValueAtTime(0.3, now + 0.04);
   master.gain.exponentialRampToValueAtTime(0.0001, now + 4.8);
   master.connect(audioContext.destination);
   activeOscillators.push(master);
@@ -1279,7 +1290,7 @@ function playGeneratedPreview(seed) {
     oscillator.type = index % 2 === 0 ? "triangle" : "sine";
     oscillator.frequency.setValueAtTime(frequency, start);
     gain.gain.setValueAtTime(0.0001, start);
-    gain.gain.exponentialRampToValueAtTime(0.22, start + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.38, start + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.28);
     oscillator.connect(gain).connect(master);
     oscillator.start(start);
@@ -1318,6 +1329,22 @@ function ensureAudioContext() {
   return true;
 }
 
+async function ensureAudioContextReady() {
+  if (!ensureAudioContext()) return false;
+
+  if (audioContext.state !== "running") {
+    try {
+      await audioContext.resume();
+    } catch {
+      // The browser can reject resume() when audio is blocked by policy.
+    }
+  }
+
+  const isRunning = audioContext.state === "running";
+  audioStatusMessage = isRunning ? "" : "音声ブロック中";
+  return isRunning;
+}
+
 function initMusicSearchIntegration() {
   renderMusicSearchPanel();
 }
@@ -1342,7 +1369,7 @@ async function searchMusicAndRenderResults(query) {
 
 async function addSelectedITunesTrack(itunesTrack, query) {
   partyJoined = true;
-  ensureAudioContext();
+  const audioReady = await ensureAudioContextReady();
 
   const partyTrack = makePartyTrackFromITunes(itunesTrack, query);
   const existingTrack = state.watchParty.queue.find(
@@ -1356,8 +1383,8 @@ async function addSelectedITunesTrack(itunesTrack, query) {
 
   state.watchParty.playback = {
     trackId: trackToSelect.id,
-    status: "playing",
-    startedAt: getSyncedNow(),
+    status: audioReady ? "playing" : "paused",
+    startedAt: audioReady ? getSyncedNow() : null,
     pausedAt: 0,
     updatedAt: new Date().toISOString(),
     updatedBy: getCurrentAccount()?.id || state.watchParty.playback.updatedBy,
