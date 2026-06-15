@@ -1179,6 +1179,15 @@ function syncPartyAudio() {
 function startGeneratedPartyLoop(track) {
   if (!ensureAudioContext()) return;
 
+  if (audioContext.state !== "running") {
+    void audioContext.resume().then(() => {
+      if (audioContext.state !== "running") return;
+      partyAudioSignature = "";
+      syncPartyAudio();
+    });
+    return;
+  }
+
   schedulePartyNotes(track);
   partyLoopTimer = window.setInterval(() => schedulePartyNotes(track), 1800);
 }
@@ -1245,6 +1254,14 @@ function playGeneratedPreview(seed) {
   stopGeneratedPreview();
 
   if (!ensureAudioContext()) return;
+  if (audioContext.state !== "running") {
+    void audioContext.resume().then(() => {
+      if (audioContext.state === "running") {
+        playGeneratedPreview(seed);
+      }
+    });
+    return;
+  }
 
   const now = audioContext.currentTime;
   const notes = makeScale(seed);
@@ -1296,7 +1313,7 @@ function ensureAudioContext() {
 
   audioContext = audioContext || new AudioContextClass();
   if (audioContext.state === "suspended") {
-    audioContext.resume();
+    void audioContext.resume().catch(() => {});
   }
   return true;
 }
@@ -1324,6 +1341,9 @@ async function searchMusicAndRenderResults(query) {
 }
 
 async function addSelectedITunesTrack(itunesTrack, query) {
+  partyJoined = true;
+  ensureAudioContext();
+
   const partyTrack = makePartyTrackFromITunes(itunesTrack, query);
   const existingTrack = state.watchParty.queue.find(
     (track) => track.itunesId === partyTrack.itunesId || track.itunesUrl === partyTrack.itunesUrl,
@@ -1336,8 +1356,8 @@ async function addSelectedITunesTrack(itunesTrack, query) {
 
   state.watchParty.playback = {
     trackId: trackToSelect.id,
-    status: "paused",
-    startedAt: null,
+    status: "playing",
+    startedAt: getSyncedNow(),
     pausedAt: 0,
     updatedAt: new Date().toISOString(),
     updatedBy: getCurrentAccount()?.id || state.watchParty.playback.updatedBy,
@@ -1407,7 +1427,7 @@ function renderMusicSearchResults(tracks, query) {
     externalLink.textContent = "iTunesで開く";
     button.className = "icon-button";
     button.type = "button";
-    button.textContent = "追加";
+    button.textContent = "追加して再生";
     button.addEventListener("click", async () => {
       try {
         await addSelectedITunesTrack(track, query);
