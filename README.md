@@ -1,6 +1,6 @@
 # music-sns
 
-音楽SNSのプロトタイプです。ブラウザで動く画面、Spotify連携、ウォッチパーティーの状態同期を試せます。
+音楽SNSのプロトタイプです。ブラウザで動く画面、iTunes曲検索、ウォッチパーティーの状態同期を試せます。
 
 このREADMEは、チームメンバーが迷わず作業できるように、ローカル起動と公開サーバーへの反映手順を詳しめに書いています。
 
@@ -23,20 +23,7 @@ http://127.0.0.1:5173/
 http://160.16.213.245:5173/
 ```
 
-Spotifyログインを公開サーバーで使うにはHTTPSのURLが必要です。`http://160.16.213.245/` や `http://160.16.213.245:5173/` はSpotifyのRedirect URIとして登録できません。
-
-このサーバーでは、応急対応として以下のHTTPS URLを使います。
-
-```text
-https://160.16.213.245.sslip.io/
-```
-
-SpotifyのRedirect URIは、URLの末尾 `/` まで完全一致が必要です。
-
-```text
-http://127.0.0.1:5173/
-https://160.16.213.245.sslip.io/
-```
+iTunes Search APIはログインやAPIキーなしで使えます。ローカル確認でも公開サーバーでも追加のDeveloper Dashboard設定は不要です。
 
 ## 実装している機能
 
@@ -48,9 +35,8 @@ https://160.16.213.245.sslip.io/
 - 共同プレイリストへの曲追加と投票
 - フェス予習用ウォッチパーティー
 - 公開サーバー上での曲キュー共有、再生状態表示、リアルタイム風コメント
-- Spotify Authorization Code with PKCE によるユーザーごとのOAuth認証
-- Spotify Web Playback SDKでのブラウザ内プレイヤー作成
-- Spotify検索APIで曲を検索し、候補から選んで各ユーザー本人の操作で再生
+- iTunes Search APIで曲を検索し、候補をキューへ追加
+- iTunes由来の曲はiTunesリンクとジャケットを表示し、アプリ内ではWeb Audioで生成したデモ音源を再生
 - `localStorage` によるローカル保存
 - Node.jsサーバーによる静的配信、ウォッチパーティー状態API、Server-Sent Events同期
 
@@ -65,8 +51,6 @@ https://160.16.213.245.sslip.io/
 - Git
 - Node.js 18以上
 - ブラウザ
-- Spotifyアカウント
-- Spotify Premiumアカウント、フル再生を確認する場合
 
 Node.jsが入っているか確認:
 
@@ -101,25 +85,9 @@ cd music-sns
 git pull origin main
 ```
 
-### 4. Spotify Client IDを確認する
+### 4. 設定を確認する
 
-`config.js` にSpotifyのClient IDが入っている必要があります。
-
-```js
-window.MUSIC_SNS_CONFIG = {
-  spotifyClientId: "your_spotify_client_id",
-};
-```
-
-アプリ共通のClient IDが共有されている場合は、それを入れてください。
-
-Spotify Developer Dashboard側には、ローカル用Redirect URIを登録します。
-
-```text
-http://127.0.0.1:5173/
-```
-
-SpotifyアプリがDevelopment Modeの場合、使うSpotifyユーザーをSpotify Developer DashboardのUsers and Accessに追加する必要があります。
+曲検索はiTunes Search APIを直接使うため、`config.js` の設定や外部サービスのログインは不要です。
 
 ### 5. ローカルサーバーを起動する
 
@@ -147,10 +115,8 @@ http://127.0.0.1:5173/
 
 1. ブラウザで `http://127.0.0.1:5173/` を開く
 2. ウォッチパーティーを開く
-3. `Spotifyログイン/プレイヤー準備` を押す
-4. Spotifyの画面で許可する
-5. アプリに戻ったら曲名やアーティスト名で検索する
-6. 検索結果から曲を選んで再生する
+3. 曲名やアーティスト名で検索する
+4. 検索結果から曲をキューに追加する
 
 ### 7. ローカル起動で困ったとき
 
@@ -162,21 +128,9 @@ npm start
 
 を実行しているか確認してください。別のアプリが5173番ポートを使っている場合は、一度そのアプリを止めます。
 
-`INVALID_CLIENT: Invalid redirect URI` が出る:
+iTunes検索でエラーが出る:
 
-Spotify Developer DashboardのRedirect URIが以下と完全一致しているか確認してください。
-
-```text
-http://127.0.0.1:5173/
-```
-
-Spotify検索や再生で `403` が出る:
-
-SpotifyアプリのDevelopment ModeのUsers and Accessに、自分のSpotifyユーザーが追加されているか確認してください。
-
-曲がフル再生されない:
-
-Spotify Premiumアカウントでログインしているか確認してください。
+ネットワーク接続、ブラウザのコンソール、`https://itunes.apple.com/search` へのアクセス可否を確認してください。
 
 ## チーム開発の基本
 
@@ -212,44 +166,22 @@ git push origin main
 
 他の人が同じファイルを触っていると、`git pull` や `git push` で衝突することがあります。その場合は勝手に消さず、チーム内で確認してください。
 
-## Spotify設定
+## 曲検索設定
 
-`config.js` の `spotifyClientId` に、Spotify Developer Dashboardで作成したアプリのClient IDを設定します。
+iTunes Search APIを使うため、APIキー、Client ID、OAuthログイン、Redirect URIは不要です。
 
-```js
-window.MUSIC_SNS_CONFIG = {
-  spotifyClientId: "your_spotify_client_id",
-};
-```
+このプロトタイプは外部サービスのフル再生を行いません。iTunesは曲検索、曲ID、iTunesリンク、ジャケット表示に使い、アプリ内再生はWeb Audioで生成したデモ音源です。
 
-ローカル用Redirect URI:
-
-```text
-http://127.0.0.1:5173/
-```
-
-公開サーバー用Redirect URI:
-
-```text
-https://160.16.213.245.sslip.io/
-```
-
-Spotifyは公開URLのRedirect URIにHTTPSを要求します。HTTPで許可されるのは `http://127.0.0.1:5173/` のようなローカル確認用URLだけです。
-
-ユーザーは画面でClient IDを入力しません。各ユーザーが「検索」や「プレイヤー準備」を使うと、Spotify OAuthで自分のSpotifyアカウントにログインします。
-
-フル再生にはSpotify Premiumアカウントが必要です。
-
-## 権利・Spotify規約対応
+## 権利・外部カタログ対応
 
 公開運用を前提に、以下の制限を入れています。
 
-- 外部音源URLの投稿・保存・再生は行いません。Spotify以外の手動追加曲はWeb Audioで生成したデモ音源だけを再生します。
-- Spotify曲の再生は各参加者本人のクリック時だけ行います。サーバーから受け取ったウォッチパーティー状態だけで、他ユーザーのSpotifyを自動再生・自動停止しません。
-- Spotify由来のキュー情報は曲ID、URI、Spotifyリンク、曲名、アーティスト名、長さ、追加日時に絞って保存します。ジャケット画像URLは永続化せず、表示時にSpotify APIから一時取得します。
-- Spotify由来のキュー情報は7日を超えると読み込み・保存時に破棄します。
+- 外部音源URLの投稿・保存・再生は行いません。アプリ内ではWeb Audioで生成したデモ音源だけを再生します。
+- iTunes曲は検索結果からキューへ追加し、iTunesリンクを表示します。アプリから外部音源のフル再生、転送、一時停止は行いません。
+- iTunes由来のキュー情報は曲ID、iTunesリンク、ジャケットURL、曲名、アーティスト名、長さ、追加日時に絞って保存します。
+- 外部カタログ由来のキュー情報は30日を超えると読み込み・保存時に破棄します。
 - コメントやメモには、音源ファイルURLと `歌詞:` / `lyrics:` 形式の歌詞本文投稿を受け付けません。
-- Spotify由来の曲表示にはSpotifyへのリンクを付けます。公開前にSpotify Developer Terms、Developer Policy、Design & Branding Guidelinesを再確認してください。
+- iTunes由来の曲表示にはiTunesへのリンクを付けます。公開前にAppleのiTunes Search API利用条件を再確認してください。
 
 ## 公開サーバーにデプロイする
 
@@ -260,7 +192,7 @@ Spotifyは公開URLのRedirect URIにHTTPSを要求します。HTTPで許可さ�
 ```text
 IPアドレス: 160.16.213.245
 画面確認URL: http://160.16.213.245:5173/
-Spotifyログイン用URL: https://160.16.213.245.sslip.io/
+HTTPS公開URL: https://160.16.213.245.sslip.io/
 ```
 
 ### 授業PDFのさくらVPSを使う場合
@@ -270,8 +202,7 @@ PDFの手順で作成したさくらVPSは、Ubuntu 24.04とApacheの実習環�
 - 最初のログインユーザーが `ubuntu` の場合は `ssh ubuntu@160.16.213.245` で入ります。
 - 別ユーザーで配置する場合は、以下の `<user>` をそのユーザー名に置き換えてください。
 - PDFでApacheを入れていても、Node.jsを `5173` 番で動かすだけなら共存できます。Apacheは通常 `80` 番を使うため、このREADMEの `5173` 番起動とは競合しません。
-- `http://160.16.213.245:5173/` で直接開くと画面確認はできますが、Spotifyログインはできません。Spotifyの公開Redirect URIにはHTTPSが必要です。
-- Spotifyログインまで公開サーバーで使う場合は、ApacheやNginxでHTTPSのリバースプロキシを設定してください。応急対応では `160.16.213.245.sslip.io` を使います。Spotify Developer DashboardのRedirect URIは `https://160.16.213.245.sslip.io/` です。
+- `http://160.16.213.245:5173/` で直接開くと画面確認できます。公開運用ではApacheやNginxでHTTPSのリバースプロキシを設定してください。応急対応では `160.16.213.245.sslip.io` を使います。
 - systemdの `WorkingDirectory=/home/<user>/music-sns` と `User=<user>` は、実際にリポジトリを置いたユーザーに合わせてください。
 
 ### 初回デプロイ
@@ -325,28 +256,12 @@ cd music-sns
 
 privateリポジトリなので、GitHubのユーザー名と認証情報を求められることがあります。GitHubの通常パスワードではなく、Personal Access TokenまたはSSHキーを使ってください。
 
-#### 4. Spotify Client IDを設定する
+#### 4. 設定ファイルを確認する
 
-`config.js` を編集します。初心者は `nano` が分かりやすいです。
-
-```bash
-nano config.js
-```
-
-中身を以下の形にします。
+曲検索はiTunes Search APIを使うため、追加設定は不要です。`config.js` は以下のままで構いません。
 
 ```js
-window.MUSIC_SNS_CONFIG = {
-  spotifyClientId: "your_spotify_client_id",
-};
-```
-
-保存は `Ctrl + O`、Enter、終了は `Ctrl + X` です。
-
-Spotify Developer Dashboardには、公開サーバー用Redirect URIを登録します。公開サーバーではHTTPSのURLが必要です。
-
-```text
-https://160.16.213.245.sslip.io/
+window.MUSIC_SNS_CONFIG = {};
 ```
 
 #### 5. 一度手動で起動して確認する
@@ -440,9 +355,9 @@ journalctl -u music-sns -f
 
 ログ表示を止めるときは `Ctrl + C` です。
 
-#### 8. Spotifyログイン用にHTTPS化する
+#### 8. HTTPSで公開する場合
 
-Spotifyログインを公開サーバーで使うには、公開URLをHTTPSにする必要があります。`http://160.16.213.245/` や `http://160.16.213.245:5173/` はSpotifyのRedirect URIとして登録できません。
+本番運用では、公開URLをHTTPSにしてNode.jsへリバースプロキシする構成がおすすめです。
 
 おすすめ構成:
 
@@ -513,13 +428,7 @@ sudo systemctl restart music-sns
 sudo systemctl reload apache2
 ```
 
-Spotify Developer DashboardのRedirect URIには、HTTPS化したURLを登録します。
-
-```text
-https://160.16.213.245.sslip.io/
-```
-
-その後、ブラウザで以下を開いてSpotifyログインを確認します。
+その後、ブラウザで以下を開いて画面と曲検索を確認します。
 
 ```text
 https://160.16.213.245.sslip.io/
@@ -566,7 +475,7 @@ sudo systemctl status music-sns
 https://160.16.213.245.sslip.io/
 ```
 
-HTTPS化していない場合は `http://160.16.213.245:5173/` で画面確認だけできます。ただし、そのURLではSpotifyログインはできません。
+HTTPS化していない場合は `http://160.16.213.245:5173/` で画面確認できます。
 
 ### 公開サーバーで困ったとき
 
@@ -607,7 +516,7 @@ GitHubからpullできない:
 - `sudo systemctl status music-sns` で起動中か確認する
 - `sudo ufw status` で5173番が許可されているか確認する
 - さくらVPSのパケットフィルターでTCP 5173が許可されているか確認する
-- SpotifyのエラーならRedirect URIがHTTPSの公開URL、`https://160.16.213.245.sslip.io/` と完全一致しているか確認する
+- iTunes検索のエラーならサーバーやブラウザから `https://itunes.apple.com/search` にアクセスできるか確認する
 
 HTTPS URLで `Service Unavailable` や「一時的に利用できない」という表示になる:
 

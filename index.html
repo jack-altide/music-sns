@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Music SNS</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=3" />
   </head>
   <body>
     <div class="app-shell">
@@ -164,28 +164,19 @@
 
           <section class="spotify-panel" aria-labelledby="spotify-title">
             <div class="section-heading">
-              <p class="eyebrow">Spotify</p>
-              <h3 id="spotify-title">Spotify連携</h3>
+              <p class="eyebrow">Music Search</p>
+              <h3 id="spotify-title">曲検索</h3>
             </div>
-            <p class="muted" id="spotify-status">未接続</p>
-            <p class="policy-note">Spotify再生は各参加者本人の操作で開始します。外部音源URLや歌詞本文は投稿できません。</p>
-            <div class="spotify-redirect">
-              <span>Redirect URI</span>
-              <code id="spotify-redirect-uri"></code>
-            </div>
-            <div class="spotify-redirect">
-              <span>App Client ID</span>
-              <code id="spotify-config-client-id"></code>
-            </div>
+            <p class="muted" id="spotify-status">検索待機中</p>
+            <p class="policy-note">iTunes Search APIで曲を検索します。アプリ内ではデモ音源を再生し、外部音源URLや歌詞本文は投稿できません。</p>
             <form class="spotify-search-form" id="spotify-search-form">
               <label>
-                Spotifyで曲を検索
+                iTunesで曲を検索
                 <input id="spotify-search-input" type="search" placeholder="曲名やアーティスト名を入力" required />
               </label>
               <button class="primary-button" type="submit">検索</button>
             </form>
             <div class="spotify-actions">
-              <button class="ghost-button" id="spotify-ready" type="button">Spotifyログイン/プレイヤー準備</button>
               <button class="primary-button" id="spotify-lilac" type="button">ライラックを検索</button>
             </div>
             <div class="spotify-results" id="spotify-results" aria-live="polite"></div>
@@ -298,7 +289,7 @@
       </article>
     </template>
 
-    <script src="config.js"></script>
-    <script src="app.js"></script>
+    <script src="config.js?v=3"></script>
+    <script src="app.js?v=3"></script>
   </body>
 </html>

@@ -8,7 +8,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 const ROOT = __dirname;
 const STATE_FILE = process.env.PARTY_STATE_FILE || path.join(ROOT, "server-state.json");
 const MAX_BODY_BYTES = 1024 * 1024;
-const SPOTIFY_CONTENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const CATALOG_CONTENT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const AUDIO_FILE_URL_PATTERN = /https?:\/\/\S+\.(?:mp3|m4a|aac|wav|flac|ogg)(?:[?#]\S*)?/i;
 const LYRICS_MARKER_PATTERN = /(?:^|\s)(?:歌詞|lyrics?)\s*[:：]/i;
 
@@ -43,6 +43,18 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && requestUrl.pathname === "/api/watch-party") {
       sendJson(response, 200, makePartyPayload("snapshot"));
+      return;
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/music-search") {
+      const query = String(requestUrl.searchParams.get("q") || "").trim();
+      if (!query) {
+        sendJson(response, 400, { error: "q is required" });
+        return;
+      }
+
+      const results = await searchITunesTracks(query);
+      sendJson(response, 200, { results });
       return;
     }
 
@@ -127,6 +139,30 @@ function makePartyPayload(reason) {
   };
 }
 
+async function searchITunesTracks(query) {
+  const params = new URLSearchParams({
+    term: query,
+    media: "music",
+    entity: "song",
+    country: "JP",
+    lang: "ja_jp",
+    limit: "10",
+  });
+  const response = await fetch(`https://itunes.apple.com/search?${params}`);
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 160)}`);
+  }
+
+  const body = JSON.parse(text);
+  if (!body || !Array.isArray(body.results)) {
+    throw new Error("unexpected iTunes response");
+  }
+
+  return body.results.slice(0, 8);
+}
+
 function normalizeIncomingWatchParty(value, clientNowValue) {
   const now = Date.now();
   const clientNow = Number(clientNowValue);
@@ -181,7 +217,7 @@ function normalizePartyTrack(track) {
     return null;
   }
 
-  const source = track.source === "spotify" || track.spotifyUri || track.spotifyId ? "spotify" : "";
+  const source = getCatalogTrackSource(track);
   const base = {
     id: normalizeText(track.id, 100),
     title,
@@ -190,27 +226,16 @@ function normalizePartyTrack(track) {
   };
 
   if (!base.id) return null;
-  if (source !== "spotify") return base;
+  if (!source) return base;
 
-  const spotifyId = getSpotifyTrackId(track);
-  if (!spotifyId) return null;
-
-  const spotifyAddedAt = normalizeIsoDate(track.spotifyAddedAt || track.addedAt, new Date().toISOString());
-  const normalized = {
-    ...base,
-    id: base.id.startsWith("spotify-") ? base.id : `spotify-${spotifyId}`,
-    source: "spotify",
-    spotifyId,
-    spotifyUri: `spotify:track:${spotifyId}`,
-    spotifyUrl: normalizeSpotifyUrl(track.spotifyUrl, spotifyId),
-    spotifyAddedAt,
-  };
+  const normalized = source === "itunes" ? normalizeITunesPartyTrack(track, base) : normalizeSpotifyPartyTrack(track, base);
+  if (!normalized) return null;
 
   if (Number.isFinite(track.durationMs)) {
     normalized.durationMs = track.durationMs;
   }
 
-  return isFreshSpotifyTrack(normalized) ? normalized : null;
+  return isFreshCatalogTrack(normalized) ? normalized : null;
 }
 
 function normalizePartyComment(comment) {
@@ -245,6 +270,51 @@ function hasBlockedUserContent(value) {
   return AUDIO_FILE_URL_PATTERN.test(text) || LYRICS_MARKER_PATTERN.test(text);
 }
 
+function getCatalogTrackSource(track) {
+  if (track.source === "itunes" || track.itunesId || track.itunesUrl) return "itunes";
+  if (track.source === "spotify" || track.spotifyUri || track.spotifyId) return "spotify";
+  return "";
+}
+
+function normalizeITunesPartyTrack(track, base) {
+  const itunesId = getITunesTrackId(track);
+  const itunesUrl = normalizeITunesUrl(track.itunesUrl || track.trackViewUrl);
+  if (!itunesId && !itunesUrl) return null;
+
+  return {
+    ...base,
+    id: base.id.startsWith("itunes-") ? base.id : `itunes-${itunesId || base.id}`,
+    source: "itunes",
+    itunesId,
+    itunesUrl,
+    artworkUrl: normalizeImageUrl(track.artworkUrl),
+    itunesAddedAt: normalizeIsoDate(track.itunesAddedAt || track.addedAt, new Date().toISOString()),
+  };
+}
+
+function normalizeSpotifyPartyTrack(track, base) {
+  const spotifyId = getSpotifyTrackId(track);
+  if (!spotifyId) return null;
+
+  return {
+    ...base,
+    id: base.id.startsWith("spotify-") ? base.id : `spotify-${spotifyId}`,
+    source: "spotify",
+    spotifyId,
+    spotifyUri: `spotify:track:${spotifyId}`,
+    spotifyUrl: normalizeSpotifyUrl(track.spotifyUrl, spotifyId),
+    spotifyAddedAt: normalizeIsoDate(track.spotifyAddedAt || track.addedAt, new Date().toISOString()),
+  };
+}
+
+function getITunesTrackId(track) {
+  if (track.itunesId) return String(track.itunesId);
+  if (track.trackId) return String(track.trackId);
+
+  const idMatch = String(track.id || "").match(/^itunes-(\d+)$/);
+  return idMatch ? idMatch[1] : "";
+}
+
 function getSpotifyTrackId(track) {
   if (track.spotifyId) return String(track.spotifyId);
 
@@ -253,6 +323,19 @@ function getSpotifyTrackId(track) {
 
   const idMatch = String(track.id || "").match(/^spotify-([A-Za-z0-9]+)$/);
   return idMatch ? idMatch[1] : "";
+}
+
+function normalizeITunesUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.protocol === "https:" && /(^|\.)apple\.com$/.test(url.hostname)) {
+      return url.toString();
+    }
+  } catch {
+    // Fall through to an empty URL.
+  }
+
+  return "";
 }
 
 function normalizeSpotifyUrl(value, spotifyId) {
@@ -268,9 +351,20 @@ function normalizeSpotifyUrl(value, spotifyId) {
   return `https://open.spotify.com/track/${spotifyId}`;
 }
 
-function isFreshSpotifyTrack(track) {
-  const addedAt = Date.parse(track.spotifyAddedAt || "");
-  return Number.isFinite(addedAt) && Date.now() - addedAt <= SPOTIFY_CONTENT_TTL_MS;
+function normalizeImageUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.protocol === "https:") return url.toString();
+  } catch {
+    // Fall through to an empty URL.
+  }
+
+  return "";
+}
+
+function isFreshCatalogTrack(track) {
+  const addedAt = Date.parse(track.itunesAddedAt || track.spotifyAddedAt || "");
+  return Number.isFinite(addedAt) && Date.now() - addedAt <= CATALOG_CONTENT_TTL_MS;
 }
 
 function serveStatic(urlPath, response) {
@@ -290,16 +384,20 @@ function serveStatic(urlPath, response) {
           sendJson(response, 404, { error: "not found" });
           return;
         }
-        response.writeHead(200, { "Content-Type": mimeTypes[".html"] });
+        response.writeHead(200, {
+          "Content-Type": mimeTypes[".html"],
+          "Cache-Control": "no-cache",
+        });
         response.end(fallbackData);
       });
       return;
     }
 
     const ext = path.extname(filePath).toLowerCase();
+    const cacheControl = [".html", ".js", ".css"].includes(ext) ? "no-cache" : "public, max-age=60";
     response.writeHead(200, {
       "Content-Type": mimeTypes[ext] || "application/octet-stream",
-      "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=60",
+      "Cache-Control": cacheControl,
     });
     response.end(data);
   });

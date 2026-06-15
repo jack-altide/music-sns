@@ -1,24 +1,10 @@
 const STORAGE_KEY = "music-sns-state-v1";
 const PARTY_CHANNEL_NAME = "music-sns-watch-party";
 const PARTY_DURATION = 36;
-const SPOTIFY_CONTENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const CATALOG_CONTENT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const AUDIO_FILE_URL_PATTERN = /https?:\/\/\S+\.(?:mp3|m4a|aac|wav|flac|ogg)(?:[?#]\S*)?/i;
 const LYRICS_MARKER_PATTERN = /(?:^|\s)(?:歌詞|lyrics?)\s*[:：]/i;
 const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-const SPOTIFY_SCOPES = [
-  "streaming",
-  "user-read-private",
-  "user-read-email",
-  "user-read-playback-state",
-  "user-modify-playback-state",
-];
-const SPOTIFY_KEYS = {
-  clientId: "music-sns-spotify-client-id",
-  codeVerifier: "music-sns-spotify-code-verifier",
-  authState: "music-sns-spotify-auth-state",
-  token: "music-sns-spotify-token",
-};
-const APP_CONFIG = window.MUSIC_SNS_CONFIG || {};
 
 const seedState = {
   currentAccountId: "acct-rin",
@@ -185,15 +171,7 @@ let partyServerSyncEnabled = false;
 let partyServerVersion = 0;
 let partyServerClockOffsetMs = 0;
 let partyServerEventSource = null;
-let spotifyPlayer = null;
-let spotifyDeviceId = "";
-let spotifyReady = false;
-let spotifyStatusMessage = "未接続";
-let spotifyInitPromise = null;
-let pendingSpotifyPlaybackAction = "";
-let localSpotifyPlaybackSignature = "";
-const spotifyTrackDetailsCache = new Map();
-const spotifyTrackDetailsRequests = new Map();
+let musicSearchStatusMessage = "";
 
 const views = {
   timeline: document.querySelector("#timeline-view"),
@@ -226,14 +204,11 @@ const partyCommentForm = document.querySelector("#party-comment-form");
 const partyTrackForm = document.querySelector("#party-track-form");
 const partyQueue = document.querySelector("#party-queue");
 const partyArt = document.querySelector("#party-art");
-const spotifyStatus = document.querySelector("#spotify-status");
-const spotifyRedirectUri = document.querySelector("#spotify-redirect-uri");
-const spotifyConfigClientId = document.querySelector("#spotify-config-client-id");
-const spotifySearchForm = document.querySelector("#spotify-search-form");
-const spotifySearchInput = document.querySelector("#spotify-search-input");
-const spotifyResults = document.querySelector("#spotify-results");
-const spotifyReadyButton = document.querySelector("#spotify-ready");
-const spotifyLilacButton = document.querySelector("#spotify-lilac");
+const musicSearchStatus = document.querySelector("#spotify-status");
+const musicSearchForm = document.querySelector("#spotify-search-form");
+const musicSearchInput = document.querySelector("#spotify-search-input");
+const musicSearchResults = document.querySelector("#spotify-results");
+const musicSearchLilacButton = document.querySelector("#spotify-lilac");
 
 document.querySelectorAll(".nav-tab").forEach((button) => {
   button.addEventListener("click", () => setView(button.dataset.view));
@@ -371,16 +346,9 @@ partyPlayButton.addEventListener("click", () => {
   ensureAudioContext();
 
   const playback = state.watchParty.playback;
-  const track = getPartyTrack(playback.trackId);
-  if (shouldStartSpotifyLocally(track, playback)) {
-    markSpotifyPlaybackAction("play");
-    syncPartyAudio();
-    renderParty();
-  } else if (playback.status === "playing") {
-    markSpotifyPlaybackAction("pause");
+  if (playback.status === "playing") {
     pausePartyPlayback();
   } else {
-    markSpotifyPlaybackAction("play");
     playPartyPlayback();
   }
 });
@@ -388,7 +356,6 @@ partyPlayButton.addEventListener("click", () => {
 partyNextButton.addEventListener("click", () => {
   partyJoined = true;
   ensureAudioContext();
-  markSpotifyPlaybackAction("play");
   advancePartyTrack(false);
 });
 
@@ -450,35 +417,26 @@ partyTrackForm.addEventListener("submit", (event) => {
   renderParty();
 });
 
-spotifyReadyButton.addEventListener("click", async () => {
-  try {
-    await prepareSpotifyPlayer();
-  } catch (errorObject) {
-    spotifyStatusMessage = `Spotifyプレイヤー準備に失敗しました: ${errorObject.message}`;
-    renderSpotifyPanel();
-  }
-});
-
-spotifySearchForm.addEventListener("submit", async (event) => {
+musicSearchForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
-  const query = spotifySearchInput.value.trim();
+  const query = musicSearchInput.value.trim();
   if (!query) return;
 
   try {
-    await searchSpotifyAndRenderResults(query);
+    await searchMusicAndRenderResults(query);
   } catch (errorObject) {
-    spotifyStatusMessage = `Spotify検索に失敗しました: ${errorObject.message}`;
-    renderSpotifyPanel();
+    musicSearchStatusMessage = `iTunes検索に失敗しました: ${errorObject.message}`;
+    renderMusicSearchPanel();
   }
 });
 
-spotifyLilacButton.addEventListener("click", async () => {
+musicSearchLilacButton.addEventListener("click", async () => {
   try {
     await searchLilacAndRenderResults();
   } catch (errorObject) {
-    spotifyStatusMessage = `Spotify連携に失敗しました: ${errorObject.message}`;
-    renderSpotifyPanel();
+    musicSearchStatusMessage = `iTunes検索に失敗しました: ${errorObject.message}`;
+    renderMusicSearchPanel();
   }
 });
 
@@ -586,7 +544,13 @@ async function publishWatchPartyToServer(reason) {
 }
 
 function shouldPublishWatchParty(reason) {
-  return reason === "reset" || reason === "spotify-search" || reason === "party-init" || reason.startsWith("party-");
+  return (
+    reason === "reset" ||
+    reason === "music-search" ||
+    reason === "spotify-search" ||
+    reason === "party-init" ||
+    reason.startsWith("party-")
+  );
 }
 
 function setView(viewName) {
@@ -620,7 +584,7 @@ function render() {
   renderArticles();
   renderPlaylist();
   renderParty();
-  renderSpotifyPanel();
+  renderMusicSearchPanel();
 }
 
 function renderAccounts() {
@@ -814,15 +778,12 @@ function renderParty() {
 
   partyRoomName.textContent = party.roomName;
   partyTrackTitle.textContent = `${track.title} / ${track.artist}`;
-  partyTrackMeta.textContent = `${party.festivalName} / ${track.note || "フェスで流れそうな候補曲"} / 操作: ${updatedByName}`;
+  const sourceLabel = isExternalCatalogTrack(track) ? " / アプリ内デモ再生" : "";
+  partyTrackMeta.textContent = `${party.festivalName} / ${track.note || "フェスで流れそうな候補曲"}${sourceLabel} / 操作: ${updatedByName}`;
   partyStatus.textContent = partyJoined ? "同期中" : "未参加";
   partyStatus.classList.toggle("is-live", partyJoined);
   partyJoinButton.textContent = partyJoined ? "同期中" : "参加して同期";
-  partyPlayButton.textContent = shouldStartSpotifyLocally(track, playback)
-    ? "自分で再生"
-    : playback.status === "playing"
-      ? "一時停止"
-      : "再生";
+  partyPlayButton.textContent = playback.status === "playing" ? "一時停止" : "再生";
   partyDuration.textContent = formatDuration(getPartyDuration(track));
   renderPartyCover(track);
 
@@ -838,32 +799,31 @@ function renderPartyCover(track) {
   partyArt.classList.remove("has-cover", "has-spotify-cover");
   partyArt.style.backgroundImage = "";
 
-  if (track?.source === "spotify") {
+  if (isExternalCatalogTrack(track)) {
     partyArt.classList.add("has-spotify-cover");
 
-    const details = getCachedSpotifyTrackDetails(track);
-    if (details?.imageUrl) {
+    const imageUrl = getTrackArtworkUrl(track);
+    if (imageUrl) {
       partyArt.classList.add("has-cover");
       const image = document.createElement("img");
-      image.src = details.imageUrl;
+      image.src = imageUrl;
       image.alt = "";
       partyArt.append(image);
     } else {
       const placeholder = document.createElement("div");
       placeholder.className = "spotify-cover-placeholder";
-      placeholder.textContent = "Spotify";
+      placeholder.textContent = getTrackSourceName(track);
       partyArt.append(placeholder);
-      void hydrateSpotifyTrackDetails(track);
     }
 
-    const spotifyUrl = details?.spotifyUrl || track.spotifyUrl;
-    if (spotifyUrl) {
+    const externalUrl = getExternalTrackUrl(track);
+    if (externalUrl) {
       const link = document.createElement("a");
       link.className = "spotify-attribution";
-      link.href = spotifyUrl;
+      link.href = externalUrl;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
-      link.textContent = "Spotifyで開く";
+      link.textContent = `${getTrackSourceName(track)}で開く`;
       partyArt.append(link);
     }
     return;
@@ -874,31 +834,11 @@ function renderPartyCover(track) {
   partyArt.append(disc);
 }
 
-function renderSpotifyPanel() {
-  const token = getStoredSpotifyToken();
-  const clientId = getSpotifyClientId();
-  const redirectUri = getSpotifyRedirectUri();
-  const redirectUriAllowed = isSpotifyRedirectUriAllowed(redirectUri);
-  const spotifyBlocked = Boolean(clientId) && !redirectUriAllowed;
-
-  spotifyRedirectUri.textContent = redirectUri;
-  spotifyConfigClientId.textContent = clientId ? maskClientId(clientId) : "未設定: config.jsのspotifyClientIdを設定";
-  spotifyReadyButton.disabled = spotifyBlocked;
-  spotifySearchForm.querySelector("button").disabled = spotifyBlocked;
-  spotifyLilacButton.disabled = spotifyBlocked;
-
-  if (!clientId) {
-    spotifyStatus.textContent = "Spotify Client IDが未設定です。config.jsを設定してください。";
-  } else if (spotifyBlocked) {
-    spotifyStatus.textContent =
-      "公開環境のSpotifyログインにはHTTPSのRedirect URIが必要です。ドメインとHTTPSを設定してください。";
-  } else if (spotifyReady && spotifyDeviceId) {
-    spotifyStatus.textContent = `接続済み / Web Playback SDK device: ${spotifyDeviceId.slice(0, 8)}...`;
-  } else if (token?.accessToken && !isSpotifyTokenExpired(token)) {
-    spotifyStatus.textContent = spotifyStatusMessage || "Spotify認証済み。プレイヤー準備を押してください。";
-  } else {
-    spotifyStatus.textContent = spotifyStatusMessage || "未接続。検索時にSpotifyログインへ進みます。";
-  }
+function renderMusicSearchPanel() {
+  musicSearchForm.querySelector("button").disabled = false;
+  musicSearchLilacButton.disabled = false;
+  musicSearchStatus.textContent =
+    musicSearchStatusMessage || "iTunes Search APIで曲を検索できます。ログインやPremium契約は不要です。";
 }
 
 function renderPartyComments() {
@@ -954,18 +894,18 @@ function renderPartyQueue() {
     row.querySelector(".track-title span").textContent = `${track.artist}${track.note ? ` / ${track.note}` : ""}`;
     const status = row.querySelector(".track-added");
     status.textContent = track.id === state.watchParty.playback.trackId ? "再生中" : "待機中";
-    if (track.source === "spotify" && track.spotifyUrl) {
+    const externalUrl = getExternalTrackUrl(track);
+    if (externalUrl) {
       const link = document.createElement("a");
-      link.href = track.spotifyUrl;
+      link.href = externalUrl;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
-      link.textContent = "Spotify";
+      link.textContent = getTrackSourceName(track);
       status.append(" / ", link);
     }
     row.querySelector("button").addEventListener("click", () => {
       partyJoined = true;
       ensureAudioContext();
-      markSpotifyPlaybackAction("play");
       selectPartyTrack(track.id, true);
     });
 
@@ -1064,7 +1004,7 @@ function ensureUserContentAllowed(...values) {
 function getContentPolicyViolation(value) {
   const text = String(value || "");
   if (AUDIO_FILE_URL_PATTERN.test(text)) {
-    return "音源ファイルURLは投稿できません。権利処理済みのSpotify連携またはデモ音源を使ってください。";
+    return "音源ファイルURLは投稿できません。曲検索の外部リンクまたはデモ音源を使ってください。";
   }
 
   if (LYRICS_MARKER_PATTERN.test(text)) {
@@ -1074,66 +1014,24 @@ function getContentPolicyViolation(value) {
   return "";
 }
 
-function markSpotifyPlaybackAction(action) {
-  pendingSpotifyPlaybackAction = action;
+function isExternalCatalogTrack(track) {
+  return track?.source === "itunes" || track?.source === "spotify";
 }
 
-function consumeSpotifyPlaybackAction() {
-  const action = pendingSpotifyPlaybackAction;
-  pendingSpotifyPlaybackAction = "";
-  return action;
+function getTrackArtworkUrl(track) {
+  return track?.artworkUrl || "";
 }
 
-function shouldStartSpotifyLocally(track, playback) {
-  if (!track?.spotifyUri || playback.status !== "playing") return false;
-  return localSpotifyPlaybackSignature !== getSpotifyPlaybackSignature(track, playback);
+function getExternalTrackUrl(track) {
+  if (track?.source === "itunes") return track.itunesUrl || "";
+  if (track?.source === "spotify") return track.spotifyUrl || "";
+  return "";
 }
 
-function getSpotifyPlaybackSignature(track, playback) {
-  return `${track.spotifyUri || track.id}-${playback.startedAt || playback.pausedAt || 0}`;
-}
-
-function getCachedSpotifyTrackDetails(track) {
-  const spotifyId = getSpotifyTrackId(track);
-  return spotifyId ? spotifyTrackDetailsCache.get(spotifyId) : null;
-}
-
-async function hydrateSpotifyTrackDetails(track) {
-  const spotifyId = getSpotifyTrackId(track);
-  if (!spotifyId || spotifyTrackDetailsRequests.has(spotifyId)) return;
-
-  const cached = spotifyTrackDetailsCache.get(spotifyId);
-  if (cached?.failedAt && Date.now() - cached.failedAt < 5 * 60 * 1000) return;
-
-  const request = spotifyApiFetch(`/tracks/${encodeURIComponent(spotifyId)}?market=JP`)
-    .then((details) => {
-      spotifyTrackDetailsCache.set(spotifyId, {
-        imageUrl: details.album?.images?.[0]?.url || "",
-        spotifyUrl: details.external_urls?.spotify || track.spotifyUrl || "",
-        fetchedAt: Date.now(),
-      });
-      renderParty();
-    })
-    .catch(() => {
-      spotifyTrackDetailsCache.set(spotifyId, { failedAt: Date.now() });
-    })
-    .finally(() => {
-      spotifyTrackDetailsRequests.delete(spotifyId);
-    });
-
-  spotifyTrackDetailsRequests.set(spotifyId, request);
-  await request;
-}
-
-function getSpotifyTrackId(track) {
-  if (!track) return "";
-  if (track.spotifyId) return String(track.spotifyId);
-
-  const uriMatch = String(track.spotifyUri || "").match(/^spotify:track:([A-Za-z0-9]+)$/);
-  if (uriMatch) return uriMatch[1];
-
-  const idMatch = String(track.id || "").match(/^spotify-([A-Za-z0-9]+)$/);
-  return idMatch ? idMatch[1] : "";
+function getTrackSourceName(track) {
+  if (track?.source === "itunes") return "iTunes";
+  if (track?.source === "spotify") return "Spotify";
+  return "外部リンク";
 }
 
 function playPartyPlayback() {
@@ -1258,38 +1156,9 @@ function startPartyClock() {
 function syncPartyAudio() {
   const playback = state.watchParty.playback;
   const track = getPartyTrack(playback.trackId);
-  const spotifyAction = consumeSpotifyPlaybackAction();
 
   if (!partyJoined || !track) {
     stopPartyAudio();
-    return;
-  }
-
-  if (track.spotifyUri) {
-    stopPartyAudio();
-
-    const signature = getSpotifyPlaybackSignature(track, playback);
-    if (playback.status !== "playing") {
-      if (spotifyAction === "pause") {
-        localSpotifyPlaybackSignature = "";
-        partyAudioSignature = "";
-        void pauseSpotifyPlayback();
-      }
-      return;
-    }
-
-    if (spotifyAction === "play") {
-      localSpotifyPlaybackSignature = signature;
-      partyAudioSignature = signature;
-      void playSpotifyTrack(track, getPartyPosition());
-      return;
-    }
-
-    if (partyAudioSignature !== signature) {
-      partyAudioSignature = signature;
-      spotifyStatusMessage = "共有中の曲は、各参加者が自分のSpotifyで再生します。";
-      renderSpotifyPanel();
-    }
     return;
   }
 
@@ -1432,282 +1301,87 @@ function ensureAudioContext() {
   return true;
 }
 
-async function initSpotifyIntegration() {
-  spotifyRedirectUri.textContent = getSpotifyRedirectUri();
-
-  const params = new URLSearchParams(window.location.search);
-  const error = params.get("error");
-  const code = params.get("code");
-  const authState = params.get("state");
-
-  if (error) {
-    spotifyStatusMessage = `Spotify認証に失敗しました: ${error}`;
-    clearSpotifyCallbackParams();
-    renderSpotifyPanel();
-    return;
-  }
-
-  if (!code) {
-    renderSpotifyPanel();
-    return;
-  }
-
-  try {
-    await completeSpotifyAuthorization(code, authState);
-    spotifyStatusMessage = "Spotify認証済み。プレイヤー準備を押してください。";
-  } catch (errorObject) {
-    spotifyStatusMessage = `Spotify認証に失敗しました: ${errorObject.message}`;
-  } finally {
-    clearSpotifyCallbackParams();
-    renderSpotifyPanel();
-  }
+function initMusicSearchIntegration() {
+  renderMusicSearchPanel();
 }
 
-async function beginSpotifyAuthorization(clientId) {
-  const redirectUri = getSpotifyRedirectUri();
-  if (!isSpotifyRedirectUriAllowed(redirectUri)) {
-    throw new Error("Spotifyの公開Redirect URIにはHTTPSが必要です。ドメインとHTTPSを設定してください。");
-  }
+async function searchMusicAndRenderResults(query) {
+  musicSearchStatusMessage = `iTunesで「${query}」を検索しています。`;
+  renderMusicSearchPanel();
 
-  const codeVerifier = generateRandomString(64);
-  const codeChallenge = await createCodeChallenge(codeVerifier);
-  const authState = generateRandomString(32);
-
-  localStorage.setItem(SPOTIFY_KEYS.codeVerifier, codeVerifier);
-  localStorage.setItem(SPOTIFY_KEYS.authState, authState);
-
-  const authUrl = new URL("https://accounts.spotify.com/authorize");
-  authUrl.search = new URLSearchParams({
-    response_type: "code",
-    client_id: clientId,
-    scope: SPOTIFY_SCOPES.join(" "),
-    redirect_uri: redirectUri,
-    state: authState,
-    code_challenge_method: "S256",
-    code_challenge: codeChallenge,
-  }).toString();
-
-  window.location.assign(authUrl.toString());
-}
-
-async function completeSpotifyAuthorization(code, authState) {
-  const savedState = localStorage.getItem(SPOTIFY_KEYS.authState);
-  const codeVerifier = localStorage.getItem(SPOTIFY_KEYS.codeVerifier);
-  const clientId = getSpotifyClientId();
-
-  if (!clientId || !codeVerifier) {
-    throw new Error("Spotify Client IDまたはcode verifierが見つかりません。");
-  }
-
-  if (!savedState || savedState !== authState) {
-    throw new Error("stateが一致しません。認証をやり直してください。");
-  }
-
-  const response = await fetch("https://accounts.spotify.com/api/token", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({
-      client_id: clientId,
-      grant_type: "authorization_code",
-      code,
-      redirect_uri: getSpotifyRedirectUri(),
-      code_verifier: codeVerifier,
-    }),
-  });
-
-  const token = await response.json();
-  if (!response.ok) {
-    throw new Error(token.error_description || token.error || "token request failed");
-  }
-
-  storeSpotifyToken(token);
-  localStorage.removeItem(SPOTIFY_KEYS.codeVerifier);
-  localStorage.removeItem(SPOTIFY_KEYS.authState);
-}
-
-async function prepareSpotifyPlayer() {
-  const token = await getValidSpotifyToken();
-  if (!token) {
-    const clientId = getSpotifyClientId();
-    if (!clientId) {
-      spotifyStatusMessage = "Spotify Client IDが未設定です。config.jsを設定してください。";
-      renderSpotifyPanel();
-      return false;
-    }
-
-    spotifyStatusMessage = "Spotifyログインに移動します。";
-    renderSpotifyPanel();
-    await beginSpotifyAuthorization(clientId);
-    return false;
-  }
-
-  if (spotifyReady && spotifyDeviceId) {
-    return true;
-  }
-
-  if (spotifyInitPromise) {
-    return spotifyInitPromise;
-  }
-
-  spotifyStatusMessage = "Spotify Web Playback SDKを読み込んでいます。";
-  renderSpotifyPanel();
-
-  spotifyInitPromise = loadSpotifySdk()
-    .then(
-      () =>
-        new Promise((resolve) => {
-          spotifyPlayer = new Spotify.Player({
-            name: "SoundCircle Watch Party",
-            getOAuthToken: async (callback) => {
-              const latestToken = await getValidSpotifyToken();
-              callback(latestToken?.accessToken || "");
-            },
-            volume: 0.8,
-          });
-
-          spotifyPlayer.addListener("ready", ({ device_id }) => {
-            spotifyDeviceId = device_id;
-            spotifyReady = true;
-            spotifyStatusMessage = "Spotifyプレイヤー準備完了。";
-            renderSpotifyPanel();
-            void transferSpotifyPlayback(false).catch(() => {});
-            resolve(true);
-          });
-
-          spotifyPlayer.addListener("not_ready", () => {
-            spotifyReady = false;
-            spotifyStatusMessage = "Spotifyプレイヤーが一時的に利用できません。";
-            renderSpotifyPanel();
-          });
-
-          spotifyPlayer.addListener("initialization_error", ({ message }) => {
-            spotifyStatusMessage = `Spotify SDK初期化エラー: ${message}`;
-            renderSpotifyPanel();
-            resolve(false);
-          });
-
-          spotifyPlayer.addListener("authentication_error", ({ message }) => {
-            spotifyStatusMessage = `Spotify認証エラー: ${message}`;
-            renderSpotifyPanel();
-            resolve(false);
-          });
-
-          spotifyPlayer.addListener("account_error", ({ message }) => {
-            spotifyStatusMessage = `Spotify Premiumが必要です: ${message}`;
-            renderSpotifyPanel();
-            resolve(false);
-          });
-
-          spotifyPlayer.addListener("playback_error", ({ message }) => {
-            spotifyStatusMessage = `Spotify再生エラー: ${message}`;
-            renderSpotifyPanel();
-          });
-
-          spotifyPlayer.connect().then((connected) => {
-            if (!connected) {
-              spotifyStatusMessage = "Spotifyプレイヤーに接続できませんでした。";
-              renderSpotifyPanel();
-              resolve(false);
-            }
-          });
-        }),
-    )
-    .finally(() => {
-      spotifyInitPromise = null;
-    });
-
-  return spotifyInitPromise;
-}
-
-async function searchSpotifyAndRenderResults(query) {
-  const clientId = getSpotifyClientId();
-
-  const token = await getValidSpotifyToken();
-  if (!token) {
-    if (!clientId) {
-      alert("Spotify Client IDが未設定です。config.jsのspotifyClientIdを設定してください。");
-      return;
-    }
-
-    await beginSpotifyAuthorization(clientId);
-    return;
-  }
-
-  spotifyStatusMessage = `Spotifyで「${query}」を検索しています。`;
-  renderSpotifyPanel();
-
-  const tracks = await searchSpotifyTracks(query);
+  const tracks = await searchITunesTracks(query);
   if (!tracks.length) {
-    spotifyStatusMessage = `「${query}」に一致する曲が見つかりませんでした。`;
-    renderSpotifyResults([], query);
-    renderSpotifyPanel();
+    musicSearchStatusMessage = `「${query}」に一致する曲が見つかりませんでした。`;
+    renderMusicSearchResults([], query);
+    renderMusicSearchPanel();
     return;
   }
 
-  spotifyStatusMessage = `「${query}」の検索結果から曲を選んでください。`;
-  spotifySearchInput.value = query;
-  renderSpotifyResults(tracks, query);
-  renderSpotifyPanel();
+  musicSearchStatusMessage = `「${query}」の検索結果から曲を選んでください。`;
+  musicSearchInput.value = query;
+  renderMusicSearchResults(tracks, query);
+  renderMusicSearchPanel();
 }
 
-async function playSelectedSpotifyTrack(spotifyTrack, query) {
-  const prepared = await prepareSpotifyPlayer();
-  if (!prepared) return;
-
-  const partyTrack = makePartyTrackFromSpotify(spotifyTrack, query);
+async function addSelectedITunesTrack(itunesTrack, query) {
+  const partyTrack = makePartyTrackFromITunes(itunesTrack, query);
   const existingTrack = state.watchParty.queue.find(
-    (track) => track.spotifyUri === partyTrack.spotifyUri || track.spotifyId === partyTrack.spotifyId,
+    (track) => track.itunesId === partyTrack.itunesId || track.itunesUrl === partyTrack.itunesUrl,
   );
-  const trackToPlay = existingTrack || partyTrack;
+  const trackToSelect = existingTrack || partyTrack;
 
   if (!existingTrack) {
     state.watchParty.queue.unshift(partyTrack);
   }
 
-  partyJoined = true;
-  markSpotifyPlaybackAction("play");
   state.watchParty.playback = {
-    trackId: trackToPlay.id,
-    status: "playing",
-    startedAt: getSyncedNow(),
+    trackId: trackToSelect.id,
+    status: "paused",
+    startedAt: null,
     pausedAt: 0,
     updatedAt: new Date().toISOString(),
     updatedBy: getCurrentAccount()?.id || state.watchParty.playback.updatedBy,
     updatedByName: getCurrentAccount()?.name || state.watchParty.playback.updatedByName,
   };
 
-  commitState("spotify-search");
-  spotifySearchInput.value = query;
+  musicSearchStatusMessage = existingTrack
+    ? `追加済みの曲をキューで選択しました: ${trackToSelect.title}`
+    : `iTunes曲をキューに追加しました: ${trackToSelect.title}`;
+  commitState("music-search");
+  musicSearchInput.value = query;
   render();
   syncPartyAudio();
   setView("party");
 }
 
 async function searchLilacAndRenderResults() {
-  await searchSpotifyAndRenderResults("ライラック Mrs. GREEN APPLE");
+  await searchMusicAndRenderResults("ライラック Mrs. GREEN APPLE");
 }
 
-async function searchSpotifyTracks(query) {
-  const response = await spotifyApiFetch(
-    `/search?${new URLSearchParams({
-      q: query,
-      type: "track",
-      market: "JP",
-      limit: "10",
-    })}`,
-  );
+async function searchITunesTracks(query) {
+  const params = new URLSearchParams({
+    q: query,
+  });
 
-  const tracks = response.tracks?.items || [];
-  return tracks.slice(0, 8);
+  const response = await fetch(`/api/music-search?${params}`);
+  const body = await readResponseBody(response);
+
+  if (!response.ok) {
+    throw new Error(getResponseErrorMessage(response, body));
+  }
+
+  if (!body || typeof body !== "object" || !Array.isArray(body.results)) {
+    throw new Error("iTunes Search APIから想定外の応答が返りました。");
+  }
+
+  return body.results.slice(0, 8);
 }
 
-function renderSpotifyResults(tracks, query) {
-  spotifyResults.innerHTML = "";
+function renderMusicSearchResults(tracks, query) {
+  musicSearchResults.innerHTML = "";
 
   if (!tracks.length) {
-    spotifyResults.append(createEmptyState("検索結果がありません。別の曲名やアーティスト名で検索してください。"));
+    musicSearchResults.append(createEmptyState("検索結果がありません。別の曲名やアーティスト名で検索してください。"));
     return;
   }
 
@@ -1717,266 +1391,79 @@ function renderSpotifyResults(tracks, query) {
     const title = document.createElement("div");
     const name = document.createElement("strong");
     const meta = document.createElement("span");
-    const spotifyLink = document.createElement("a");
+    const externalLink = document.createElement("a");
     const button = document.createElement("button");
 
     row.className = "spotify-result";
     title.className = "spotify-result-title";
     image.alt = "";
-    image.src = track.album?.images?.[2]?.url || track.album?.images?.[0]?.url || "";
-    name.textContent = track.name;
-    meta.textContent = `${track.artists.map((artist) => artist.name).join(", ")} / ${track.album?.name || "Spotify"}`;
-    spotifyLink.className = "spotify-content-link";
-    spotifyLink.href = track.external_urls?.spotify || "#";
-    spotifyLink.target = "_blank";
-    spotifyLink.rel = "noopener noreferrer";
-    spotifyLink.textContent = "Spotifyで開く";
+    image.src = getHighResolutionArtworkUrl(track.artworkUrl100 || track.artworkUrl60 || "");
+    name.textContent = track.trackName || "曲名不明";
+    meta.textContent = `${track.artistName || "アーティスト不明"} / ${track.collectionName || "iTunes"}`;
+    externalLink.className = "spotify-content-link";
+    externalLink.href = track.trackViewUrl || "#";
+    externalLink.target = "_blank";
+    externalLink.rel = "noopener noreferrer";
+    externalLink.textContent = "iTunesで開く";
     button.className = "icon-button";
     button.type = "button";
-    button.textContent = "再生";
+    button.textContent = "追加";
     button.addEventListener("click", async () => {
       try {
-        await playSelectedSpotifyTrack(track, query);
+        await addSelectedITunesTrack(track, query);
       } catch (errorObject) {
-        spotifyStatusMessage = `Spotify再生に失敗しました: ${errorObject.message}`;
-        renderSpotifyPanel();
+        musicSearchStatusMessage = `iTunes曲の追加に失敗しました: ${errorObject.message}`;
+        renderMusicSearchPanel();
       }
     });
 
-    title.append(name, meta, spotifyLink);
+    title.append(name, meta, externalLink);
     row.append(image, title, button);
-    spotifyResults.append(row);
+    musicSearchResults.append(row);
   });
 }
 
-function makePartyTrackFromSpotify(track, query) {
-  const artist = track.artists.map((item) => item.name).join(", ");
+function makePartyTrackFromITunes(track, query) {
+  const itunesId = String(track.trackId || "");
+  const artworkUrl = getHighResolutionArtworkUrl(track.artworkUrl100 || track.artworkUrl60 || "");
   return {
-    id: `spotify-${track.id}`,
-    title: track.name,
-    artist,
-    note: `Spotifyから追加: ${query}`,
-    source: "spotify",
-    spotifyId: track.id,
-    spotifyUri: track.uri,
-    spotifyUrl: track.external_urls?.spotify || "",
-    durationMs: track.duration_ms,
-    spotifyAddedAt: new Date().toISOString(),
+    id: `itunes-${itunesId || makeId("track")}`,
+    title: track.trackName || "曲名不明",
+    artist: track.artistName || "アーティスト不明",
+    note: `iTunesから追加: ${query}`,
+    source: "itunes",
+    itunesId,
+    itunesUrl: track.trackViewUrl || "",
+    artworkUrl,
+    durationMs: Number.isFinite(track.trackTimeMillis) ? track.trackTimeMillis : undefined,
+    itunesAddedAt: new Date().toISOString(),
   };
 }
 
-async function playSpotifyTrack(track, positionSeconds) {
-  const prepared = await prepareSpotifyPlayer();
-  if (!prepared || !spotifyDeviceId) return;
-
-  try {
-    await transferSpotifyPlayback(false);
-    await wait(250);
-    await spotifyApiFetch(`/me/player/play?device_id=${encodeURIComponent(spotifyDeviceId)}`, {
-      method: "PUT",
-      body: {
-        uris: [track.spotifyUri],
-        position_ms: Math.max(0, Math.floor(positionSeconds * 1000)),
-      },
-      expectJson: false,
-    });
-    spotifyStatusMessage = `Spotifyで再生中: ${track.title}`;
-    renderSpotifyPanel();
-  } catch (errorObject) {
-    spotifyStatusMessage = `Spotify再生に失敗しました: ${errorObject.message}`;
-    renderSpotifyPanel();
-  }
+function getHighResolutionArtworkUrl(value) {
+  return String(value || "").replace(/\/\d+x\d+bb\.(jpg|png|webp)$/i, "/600x600bb.$1");
 }
 
-async function pauseSpotifyPlayback() {
-  if (!spotifyDeviceId) return;
+async function readResponseBody(response) {
+  const text = await response.text();
+  if (!text) return null;
 
   try {
-    await spotifyApiFetch(`/me/player/pause?device_id=${encodeURIComponent(spotifyDeviceId)}`, {
-      method: "PUT",
-      expectJson: false,
-    });
+    return JSON.parse(text);
   } catch {
-    // Playback may already be paused or the Spotify device may be inactive.
+    return text;
   }
 }
 
-async function transferSpotifyPlayback(shouldPlay) {
-  if (!spotifyDeviceId) return;
-
-  await spotifyApiFetch("/me/player", {
-    method: "PUT",
-    body: {
-      device_ids: [spotifyDeviceId],
-      play: shouldPlay,
-    },
-    expectJson: false,
-  });
-}
-
-async function spotifyApiFetch(path, options = {}) {
-  const token = await getValidSpotifyToken();
-  if (!token) {
-    throw new Error("Spotify認証が必要です。");
+function getResponseErrorMessage(response, body) {
+  if (body && typeof body === "object") {
+    return body.error_description || body.error?.message || body.error || `${response.status} ${response.statusText}`;
   }
 
-  const response = await fetch(`https://api.spotify.com/v1${path}`, {
-    method: options.method || "GET",
-    headers: {
-      Authorization: `Bearer ${token.accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  const text = String(body || "").trim();
+  if (text) return `${response.status} ${response.statusText}: ${text.slice(0, 160)}`;
 
-  if (response.status === 204 || options.expectJson === false) {
-    if (!response.ok) {
-      throw new Error(`${response.status} ${response.statusText}`);
-    }
-    return null;
-  }
-
-  const body = await response.json();
-  if (!response.ok) {
-    throw new Error(body.error?.message || body.error || `${response.status} ${response.statusText}`);
-  }
-
-  return body;
-}
-
-async function getValidSpotifyToken() {
-  const token = getStoredSpotifyToken();
-  if (!token) return null;
-  if (!isSpotifyTokenExpired(token)) return token;
-  if (!token.refreshToken) return null;
-
-  const clientId = getSpotifyClientId();
-  if (!clientId) return null;
-
-  const response = await fetch("https://accounts.spotify.com/api/token", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({
-      client_id: clientId,
-      grant_type: "refresh_token",
-      refresh_token: token.refreshToken,
-    }),
-  });
-
-  const refreshed = await response.json();
-  if (!response.ok) return null;
-
-  storeSpotifyToken({
-    ...refreshed,
-    refresh_token: refreshed.refresh_token || token.refreshToken,
-  });
-
-  return getStoredSpotifyToken();
-}
-
-function storeSpotifyToken(token) {
-  localStorage.setItem(
-    SPOTIFY_KEYS.token,
-    JSON.stringify({
-      accessToken: token.access_token,
-      refreshToken: token.refresh_token,
-      expiresAt: Date.now() + token.expires_in * 1000 - 60000,
-      scope: token.scope,
-      tokenType: token.token_type,
-    }),
-  );
-}
-
-function getStoredSpotifyToken() {
-  try {
-    const token = localStorage.getItem(SPOTIFY_KEYS.token);
-    return token ? JSON.parse(token) : null;
-  } catch {
-    return null;
-  }
-}
-
-function isSpotifyTokenExpired(token) {
-  return !token.accessToken || Date.now() >= token.expiresAt;
-}
-
-function getSpotifyClientId() {
-  const configuredClientId = String(APP_CONFIG.spotifyClientId || "").trim();
-  const legacyClientId = localStorage.getItem(SPOTIFY_KEYS.clientId) || "";
-  return configuredClientId || legacyClientId;
-}
-
-function maskClientId(clientId) {
-  if (clientId.length <= 12) return clientId;
-  return `${clientId.slice(0, 8)}...${clientId.slice(-4)}`;
-}
-
-function loadSpotifySdk() {
-  if (window.Spotify?.Player) {
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve, reject) => {
-    const existingScript = document.querySelector('script[src="https://sdk.scdn.co/spotify-player.js"]');
-    window.onSpotifyWebPlaybackSDKReady = () => resolve();
-
-    if (existingScript) return;
-
-    const script = document.createElement("script");
-    script.src = "https://sdk.scdn.co/spotify-player.js";
-    script.async = true;
-    script.onerror = () => reject(new Error("Spotify SDKを読み込めませんでした。"));
-    document.body.append(script);
-  });
-}
-
-async function createCodeChallenge(codeVerifier) {
-  const data = new TextEncoder().encode(codeVerifier);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return btoa(String.fromCharCode(...new Uint8Array(digest)))
-    .replace(/=/g, "")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_");
-}
-
-function generateRandomString(length) {
-  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
-  const values = crypto.getRandomValues(new Uint8Array(length));
-  return Array.from(values, (value) => possible[value % possible.length]).join("");
-}
-
-function getSpotifyRedirectUri() {
-  const configuredRedirectUri = String(APP_CONFIG.spotifyRedirectUri || "").trim();
-  if (configuredRedirectUri) return configuredRedirectUri;
-
-  const pathname = window.location.pathname.endsWith("/index.html")
-    ? window.location.pathname.slice(0, -"index.html".length)
-    : window.location.pathname;
-  return `${window.location.origin}${pathname || "/"}`;
-}
-
-function isSpotifyRedirectUriAllowed(redirectUri) {
-  try {
-    const url = new URL(redirectUri);
-    if (url.protocol === "https:") return true;
-    if (url.protocol !== "http:") return false;
-
-    return url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname === "::1";
-  } catch {
-    return false;
-  }
-}
-
-function clearSpotifyCallbackParams() {
-  window.history.replaceState({}, document.title, getSpotifyRedirectUri());
-}
-
-function wait(ms) {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
+  return `${response.status} ${response.statusText}`;
 }
 
 function makeScale(seed) {
@@ -2164,7 +1651,7 @@ function normalizePartyTrack(track) {
     return null;
   }
 
-  const source = track.source === "spotify" || track.spotifyUri || track.spotifyId ? "spotify" : "";
+  const source = getCatalogTrackSource(track);
   const base = {
     id: normalizeText(track.id, 100) || makeId("party-track"),
     title,
@@ -2172,27 +1659,53 @@ function normalizePartyTrack(track) {
     note,
   };
 
-  if (source !== "spotify") return base;
+  if (!source) return base;
 
+  const normalized = source === "itunes" ? normalizeITunesPartyTrack(track, base) : normalizeSpotifyPartyTrack(track, base);
+  if (!normalized) return null;
+
+  if (Number.isFinite(track.durationMs)) {
+    normalized.durationMs = track.durationMs;
+  }
+
+  return isFreshCatalogTrack(normalized) ? normalized : null;
+}
+
+function getCatalogTrackSource(track) {
+  if (track.source === "itunes" || track.itunesId || track.itunesUrl) return "itunes";
+  if (track.source === "spotify" || track.spotifyUri || track.spotifyId) return "spotify";
+  return "";
+}
+
+function normalizeITunesPartyTrack(track, base) {
+  const itunesId = getITunesTrackId(track);
+  const itunesUrl = normalizeITunesUrl(track.itunesUrl || track.trackViewUrl);
+  if (!itunesId && !itunesUrl) return null;
+
+  return {
+    ...base,
+    id: base.id.startsWith("itunes-") ? base.id : `itunes-${itunesId || makeId("track")}`,
+    source: "itunes",
+    itunesId,
+    itunesUrl,
+    artworkUrl: normalizeImageUrl(track.artworkUrl),
+    itunesAddedAt: normalizeIsoDate(track.itunesAddedAt || track.addedAt, new Date().toISOString()),
+  };
+}
+
+function normalizeSpotifyPartyTrack(track, base) {
   const spotifyId = getSpotifyTrackId(track);
   if (!spotifyId) return null;
 
-  const spotifyAddedAt = normalizeIsoDate(track.spotifyAddedAt || track.addedAt, new Date().toISOString());
-  const normalized = {
+  return {
     ...base,
     id: base.id.startsWith("spotify-") ? base.id : `spotify-${spotifyId}`,
     source: "spotify",
     spotifyId,
     spotifyUri: `spotify:track:${spotifyId}`,
     spotifyUrl: normalizeSpotifyUrl(track.spotifyUrl, spotifyId),
-    spotifyAddedAt,
+    spotifyAddedAt: normalizeIsoDate(track.spotifyAddedAt || track.addedAt, new Date().toISOString()),
   };
-
-  if (Number.isFinite(track.durationMs)) {
-    normalized.durationMs = track.durationMs;
-  }
-
-  return isFreshSpotifyTrack(normalized) ? normalized : null;
 }
 
 function normalizePartyComment(comment) {
@@ -2221,6 +1734,37 @@ function normalizeIsoDate(value, fallback) {
   return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
 }
 
+function getITunesTrackId(track) {
+  if (track.itunesId) return String(track.itunesId);
+  if (track.trackId) return String(track.trackId);
+
+  const idMatch = String(track.id || "").match(/^itunes-(\d+)$/);
+  return idMatch ? idMatch[1] : "";
+}
+
+function getSpotifyTrackId(track) {
+  if (track.spotifyId) return String(track.spotifyId);
+
+  const uriMatch = String(track.spotifyUri || "").match(/^spotify:track:([A-Za-z0-9]+)$/);
+  if (uriMatch) return uriMatch[1];
+
+  const idMatch = String(track.id || "").match(/^spotify-([A-Za-z0-9]+)$/);
+  return idMatch ? idMatch[1] : "";
+}
+
+function normalizeITunesUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.protocol === "https:" && /(^|\.)apple\.com$/.test(url.hostname)) {
+      return url.toString();
+    }
+  } catch {
+    // Fall through to an empty URL.
+  }
+
+  return "";
+}
+
 function normalizeSpotifyUrl(value, spotifyId) {
   try {
     const url = new URL(String(value || ""));
@@ -2234,9 +1778,20 @@ function normalizeSpotifyUrl(value, spotifyId) {
   return `https://open.spotify.com/track/${spotifyId}`;
 }
 
-function isFreshSpotifyTrack(track) {
-  const addedAt = Date.parse(track.spotifyAddedAt || "");
-  return Number.isFinite(addedAt) && Date.now() - addedAt <= SPOTIFY_CONTENT_TTL_MS;
+function normalizeImageUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.protocol === "https:") return url.toString();
+  } catch {
+    // Fall through to an empty URL.
+  }
+
+  return "";
+}
+
+function isFreshCatalogTrack(track) {
+  const addedAt = Date.parse(track.itunesAddedAt || track.spotifyAddedAt || "");
+  return Number.isFinite(addedAt) && Date.now() - addedAt <= CATALOG_CONTENT_TTL_MS;
 }
 
 function commitState(reason) {
@@ -2329,7 +1884,7 @@ function formatDuration(value) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-void initSpotifyIntegration();
+initMusicSearchIntegration();
 render();
 startPartyClock();
 initPartyServerSync();
