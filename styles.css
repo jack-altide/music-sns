@@ -437,6 +437,11 @@ textarea:focus {
   color: var(--accent-strong);
 }
 
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .article-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -867,6 +872,17 @@ textarea:focus {
   font-weight: 900;
 }
 
+.track-number.has-artwork {
+  overflow: hidden;
+  background: #eee7d9;
+}
+
+.track-number.has-artwork img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .track-title {
   min-width: 0;
 }
@@ -875,6 +891,13 @@ textarea:focus {
 .track-title span,
 .track-added {
   display: block;
+}
+
+.track-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .track-title strong {

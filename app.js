@@ -164,6 +164,7 @@ let partyJoined = false;
 let partyChannel = null;
 let partyClockTimer = null;
 let partyAudioElement = null;
+let playlistPreviewAudio = null;
 let partyAudioSignature = "";
 let partyLoopTimer = null;
 let partyOscillators = [];
@@ -174,6 +175,7 @@ let partyServerVersion = 0;
 let partyServerClockOffsetMs = 0;
 let partyServerEventSource = null;
 let musicSearchStatusMessage = "";
+let playlistSearchStatusMessage = "";
 
 const views = {
   timeline: document.querySelector("#timeline-view"),
@@ -191,6 +193,10 @@ const articleGrid = document.querySelector("#article-grid");
 const playlistForm = document.querySelector("#playlist-form");
 const playlistTracks = document.querySelector("#playlist-tracks");
 const playlistStats = document.querySelector("#playlist-stats");
+const playlistSearchStatus = document.querySelector("#playlist-search-status");
+const playlistSearchForm = document.querySelector("#playlist-search-form");
+const playlistSearchInput = document.querySelector("#playlist-search-input");
+const playlistSearchResults = document.querySelector("#playlist-search-results");
 const partyStatus = document.querySelector("#party-status");
 const partyJoinButton = document.querySelector("#party-join");
 const partyPlayButton = document.querySelector("#party-play");
@@ -335,6 +341,20 @@ playlistForm.addEventListener("submit", (event) => {
   playlistForm.reset();
   commitState("playlist");
   renderPlaylist();
+});
+
+playlistSearchForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const query = playlistSearchInput.value.trim();
+  if (!query) return;
+
+  try {
+    await searchPlaylistTracksAndRenderResults(query);
+  } catch (errorObject) {
+    playlistSearchStatusMessage = `iTunes検索に失敗しました: ${errorObject.message}`;
+    renderPlaylistSearchPanel();
+  }
 });
 
 partyJoinButton.addEventListener("click", () => {
@@ -591,6 +611,7 @@ function render() {
   renderPlaylist();
   renderParty();
   renderMusicSearchPanel();
+  renderPlaylistSearchPanel();
 }
 
 function renderAccounts() {
@@ -748,14 +769,44 @@ function renderPlaylist() {
           <span></span>
         </div>
         <div class="track-added"></div>
-        <button class="icon-button vote-button" type="button" aria-label="この曲に投票">+</button>
+        <div class="track-actions">
+          <button class="icon-button playlist-preview-button" type="button">プレビュー</button>
+          <button class="icon-button vote-button" type="button" aria-label="この曲に投票">+</button>
+        </div>
       `;
 
-      row.querySelector(".track-number").textContent = index + 1;
+      const trackNumber = row.querySelector(".track-number");
+      const artworkUrl = getTrackArtworkUrl(track);
+      if (artworkUrl) {
+        const image = document.createElement("img");
+        image.src = artworkUrl;
+        image.alt = "";
+        trackNumber.classList.add("has-artwork");
+        trackNumber.textContent = "";
+        trackNumber.append(image);
+      } else {
+        trackNumber.textContent = index + 1;
+      }
       row.querySelector(".track-title strong").textContent = track.title;
       row.querySelector(".track-title span").textContent = `${track.artist}${track.note ? ` / ${track.note}` : ""}`;
-      row.querySelector(".track-added").textContent = `追加: ${account.name} / ${track.votes}票`;
-      row.querySelector("button").addEventListener("click", () => {
+      const added = row.querySelector(".track-added");
+      added.textContent = `追加: ${account.name} / ${track.votes}票`;
+      const externalUrl = getExternalTrackUrl(track);
+      if (externalUrl) {
+        const link = document.createElement("a");
+        link.href = externalUrl;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = getTrackSourceName(track);
+        added.append(" / ", link);
+      }
+
+      const previewButton = row.querySelector(".playlist-preview-button");
+      const previewUrl = getTrackPreviewUrl(track);
+      previewButton.disabled = !previewUrl;
+      previewButton.title = previewUrl ? "iTunesプレビューを再生" : "この曲にはプレビューがありません。";
+      previewButton.addEventListener("click", () => playPlaylistPreview(track));
+      row.querySelector(".vote-button").addEventListener("click", () => {
         track.votes += 1;
         commitState("playlist-vote");
         renderPlaylist();
@@ -845,6 +896,14 @@ function renderMusicSearchPanel() {
   musicSearchLilacButton.disabled = false;
   musicSearchStatus.textContent =
     musicSearchStatusMessage || "iTunes Search APIで曲を検索できます。ログインやPremium契約は不要です。";
+}
+
+function renderPlaylistSearchPanel() {
+  if (!playlistSearchStatus) return;
+
+  playlistSearchForm.querySelector("button").disabled = false;
+  playlistSearchStatus.textContent =
+    playlistSearchStatusMessage || "iTunes Search APIで実際の曲を検索してプレイリストに追加できます。";
 }
 
 function renderPartyComments() {
@@ -1156,6 +1215,53 @@ function getSyncedNow() {
   return Date.now() - partyServerClockOffsetMs;
 }
 
+function playPlaylistPreview(track) {
+  const previewUrl = getTrackPreviewUrl(track);
+  if (!previewUrl) {
+    alert("この曲にはiTunesプレビューがありません。");
+    return;
+  }
+
+  stopGeneratedPreview();
+  stopPartyAudio();
+  stopPlaylistPreview();
+
+  const audio = new Audio(previewUrl);
+  playlistPreviewAudio = audio;
+  audio.preload = "auto";
+  audio.volume = 0.9;
+  audio.addEventListener(
+    "ended",
+    () => {
+      if (playlistPreviewAudio === audio) playlistPreviewAudio = null;
+    },
+    { once: true },
+  );
+  audio.addEventListener(
+    "error",
+    () => {
+      if (playlistPreviewAudio !== audio) return;
+      playlistPreviewAudio = null;
+      alert("iTunesプレビューを再生できませんでした。");
+    },
+    { once: true },
+  );
+  void audio.play().catch(() => {
+    if (playlistPreviewAudio !== audio) return;
+    playlistPreviewAudio = null;
+    alert("ブラウザの音声制限により再生できませんでした。もう一度ボタン操作から試してください。");
+  });
+}
+
+function stopPlaylistPreview() {
+  if (!playlistPreviewAudio) return;
+
+  playlistPreviewAudio.pause();
+  playlistPreviewAudio.removeAttribute("src");
+  playlistPreviewAudio.load();
+  playlistPreviewAudio = null;
+}
+
 function updatePartyClock() {
   const playback = state.watchParty.playback;
   const position = getPartyPosition();
@@ -1205,6 +1311,7 @@ function syncPartyAudio() {
 }
 
 function startPartyPreviewAudio(track, previewUrl) {
+  stopPlaylistPreview();
   stopGeneratedPreview();
 
   const audio = new Audio(previewUrl);
@@ -1263,6 +1370,7 @@ function startPartyPreviewAudio(track, previewUrl) {
 }
 
 function startGeneratedPartyLoop(track) {
+  stopPlaylistPreview();
   if (!ensureAudioContext()) return;
 
   if (audioContext.state !== "running") {
@@ -1486,6 +1594,24 @@ async function searchMusicAndRenderResults(query) {
   renderMusicSearchPanel();
 }
 
+async function searchPlaylistTracksAndRenderResults(query) {
+  playlistSearchStatusMessage = `iTunesで「${query}」を検索しています。`;
+  renderPlaylistSearchPanel();
+
+  const tracks = await searchITunesTracks(query);
+  if (!tracks.length) {
+    playlistSearchStatusMessage = `「${query}」に一致する曲が見つかりませんでした。`;
+    renderPlaylistSearchResults([], query);
+    renderPlaylistSearchPanel();
+    return;
+  }
+
+  playlistSearchStatusMessage = `「${query}」の検索結果からプレイリストに追加する曲を選んでください。`;
+  playlistSearchInput.value = query;
+  renderPlaylistSearchResults(tracks, query);
+  renderPlaylistSearchPanel();
+}
+
 async function addSelectedITunesTrack(itunesTrack, query) {
   partyJoined = true;
 
@@ -1527,6 +1653,36 @@ async function addSelectedITunesTrack(itunesTrack, query) {
   render();
   syncPartyAudio();
   setView("party");
+}
+
+function addSelectedITunesTrackToPlaylist(itunesTrack, query) {
+  const account = getCurrentAccount();
+  if (!account) {
+    alert("先にアカウントを作成してください。");
+    return;
+  }
+
+  const playlistTrack = makePlaylistTrackFromITunes(itunesTrack, query, account);
+  const existingTrack = state.playlist.tracks.find(
+    (track) => track.itunesId === playlistTrack.itunesId || track.itunesUrl === playlistTrack.itunesUrl,
+  );
+
+  if (existingTrack) {
+    existingTrack.previewUrl = playlistTrack.previewUrl || existingTrack.previewUrl;
+    existingTrack.artworkUrl = playlistTrack.artworkUrl || existingTrack.artworkUrl;
+    existingTrack.durationMs = playlistTrack.durationMs || existingTrack.durationMs;
+    existingTrack.trackDurationMs = playlistTrack.trackDurationMs || existingTrack.trackDurationMs;
+    existingTrack.itunesAddedAt = playlistTrack.itunesAddedAt;
+    playlistSearchStatusMessage = `追加済みの曲を更新しました: ${existingTrack.title}`;
+  } else {
+    state.playlist.tracks.push(playlistTrack);
+    playlistSearchStatusMessage = `iTunes曲をプレイリストに追加しました: ${playlistTrack.title}`;
+  }
+
+  commitState("playlist-itunes");
+  playlistSearchInput.value = query;
+  renderPlaylist();
+  renderPlaylistSearchPanel();
 }
 
 async function searchLilacAndRenderResults() {
@@ -1600,6 +1756,47 @@ function renderMusicSearchResults(tracks, query) {
   });
 }
 
+function renderPlaylistSearchResults(tracks, query) {
+  playlistSearchResults.innerHTML = "";
+
+  if (!tracks.length) {
+    playlistSearchResults.append(createEmptyState("検索結果がありません。別の曲名やアーティスト名で検索してください。"));
+    return;
+  }
+
+  tracks.forEach((track) => {
+    const row = document.createElement("div");
+    const image = document.createElement("img");
+    const title = document.createElement("div");
+    const name = document.createElement("strong");
+    const meta = document.createElement("span");
+    const externalLink = document.createElement("a");
+    const button = document.createElement("button");
+    const hasPreview = Boolean(normalizeITunesPreviewUrl(track.previewUrl));
+
+    row.className = "spotify-result";
+    title.className = "spotify-result-title";
+    image.alt = "";
+    image.src = getHighResolutionArtworkUrl(track.artworkUrl100 || track.artworkUrl60 || "");
+    name.textContent = track.trackName || "曲名不明";
+    meta.textContent = `${track.artistName || "アーティスト不明"} / ${track.collectionName || "iTunes"}`;
+    externalLink.className = "spotify-content-link";
+    externalLink.href = track.trackViewUrl || "#";
+    externalLink.target = "_blank";
+    externalLink.rel = "noopener noreferrer";
+    externalLink.textContent = "iTunesで開く";
+    button.className = "icon-button";
+    button.type = "button";
+    button.textContent = hasPreview ? "追加" : "リンク追加";
+    if (!hasPreview) button.title = "この検索結果にはiTunesプレビューURLがありません。";
+    button.addEventListener("click", () => addSelectedITunesTrackToPlaylist(track, query));
+
+    title.append(name, meta, externalLink);
+    row.append(image, title, button);
+    playlistSearchResults.append(row);
+  });
+}
+
 function makePartyTrackFromITunes(track, query) {
   const itunesId = String(track.trackId || "");
   const artworkUrl = getHighResolutionArtworkUrl(track.artworkUrl100 || track.artworkUrl60 || "");
@@ -1609,6 +1806,28 @@ function makePartyTrackFromITunes(track, query) {
     title: track.trackName || "曲名不明",
     artist: track.artistName || "アーティスト不明",
     note: `iTunesから追加: ${query}`,
+    source: "itunes",
+    itunesId,
+    itunesUrl: track.trackViewUrl || "",
+    previewUrl,
+    artworkUrl,
+    durationMs: previewUrl ? ITUNES_PREVIEW_DURATION * 1000 : undefined,
+    trackDurationMs: Number.isFinite(track.trackTimeMillis) ? track.trackTimeMillis : undefined,
+    itunesAddedAt: new Date().toISOString(),
+  };
+}
+
+function makePlaylistTrackFromITunes(track, query, account) {
+  const itunesId = String(track.trackId || "");
+  const artworkUrl = getHighResolutionArtworkUrl(track.artworkUrl100 || track.artworkUrl60 || "");
+  const previewUrl = normalizeITunesPreviewUrl(track.previewUrl);
+  return {
+    id: `itunes-${itunesId || makeId("track")}`,
+    title: track.trackName || "曲名不明",
+    artist: track.artistName || "アーティスト不明",
+    note: `iTunesから追加: ${query}`,
+    addedBy: account.id,
+    votes: 0,
     source: "itunes",
     itunesId,
     itunesUrl: track.trackViewUrl || "",
@@ -1770,14 +1989,30 @@ function normalizePlaylistTrack(track) {
     return null;
   }
 
-  return {
-    id: normalizeText(track.id, 80) || makeId("track"),
+  const base = {
+    id: normalizeText(track.id, 100) || makeId("track"),
     title,
     artist,
     note,
     addedBy: normalizeText(track.addedBy, 80),
     votes: Number.isFinite(track.votes) ? track.votes : 0,
   };
+
+  const source = getCatalogTrackSource(track);
+  if (!source) return base;
+
+  const normalized = source === "itunes" ? normalizeITunesPartyTrack(track, base) : normalizeSpotifyPartyTrack(track, base);
+  if (!normalized) return null;
+
+  if (Number.isFinite(track.durationMs)) {
+    normalized.durationMs = track.durationMs;
+  }
+
+  if (Number.isFinite(track.trackDurationMs)) {
+    normalized.trackDurationMs = track.trackDurationMs;
+  }
+
+  return isFreshCatalogTrack(normalized) ? normalized : null;
 }
 
 function normalizeWatchParty(value, fallback) {

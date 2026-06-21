@@ -244,11 +244,27 @@
             </div>
           </section>
 
+          <section class="spotify-panel" aria-labelledby="playlist-search-title">
+            <div class="section-heading">
+              <p class="eyebrow">iTunes Search</p>
+              <h3 id="playlist-search-title">iTunesから曲を追加</h3>
+            </div>
+            <p class="muted" id="playlist-search-status">曲名やアーティスト名で検索できます。</p>
+            <form class="spotify-search-form" id="playlist-search-form">
+              <label>
+                iTunesで曲を検索
+                <input id="playlist-search-input" type="search" placeholder="曲名やアーティスト名を入力" required />
+              </label>
+              <button class="primary-button" type="submit">検索</button>
+            </form>
+            <div class="spotify-results" id="playlist-search-results" aria-live="polite"></div>
+          </section>
+
           <form class="composer compact" id="playlist-form">
             <div class="composer-header">
               <div>
                 <p class="eyebrow">Add Track</p>
-                <h3>曲を追加</h3>
+                <h3>手入力で曲を追加</h3>
               </div>
             </div>
             <div class="form-grid">
