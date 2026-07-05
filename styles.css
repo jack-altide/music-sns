@@ -352,6 +352,19 @@ textarea:focus {
     linear-gradient(135deg, #146c72, #171614 48%, #c65043);
 }
 
+.post-cover.has-cover {
+  overflow: hidden;
+  background: #171614;
+}
+
+.post-cover.has-cover img {
+  width: 100%;
+  height: 100%;
+  min-height: 136px;
+  object-fit: cover;
+  display: block;
+}
+
 .cover-live {
   background:
     linear-gradient(90deg, rgba(255, 253, 248, 0.3) 1px, transparent 1px),
@@ -618,6 +631,16 @@ textarea:focus {
   gap: 14px;
   margin-top: 16px;
   padding: 18px;
+}
+
+.timeline-search-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbf8f1;
 }
 
 .spotify-search-form {

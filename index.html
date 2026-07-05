@@ -83,6 +83,21 @@
             </div>
 
             <input type="hidden" id="post-type" value="music" />
+            <section class="timeline-search-panel music-field" aria-labelledby="timeline-search-title">
+              <div class="section-heading">
+                <p class="eyebrow">iTunes Search</p>
+                <h3 id="timeline-search-title">iTunesから曲を選ぶ</h3>
+              </div>
+              <p class="muted" id="timeline-search-status">曲名やアーティスト名で検索して、投稿する曲を選べます。</p>
+              <div class="spotify-search-form">
+                <label>
+                  iTunesで曲を検索
+                  <input id="timeline-search-input" type="search" placeholder="曲名やアーティスト名を入力" />
+                </label>
+                <button class="primary-button" id="timeline-search-button" type="button">検索</button>
+              </div>
+              <div class="spotify-results" id="timeline-search-results" aria-live="polite"></div>
+            </section>
             <div class="form-grid">
               <label class="music-field">
                 曲名
